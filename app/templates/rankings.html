@@ -1,0 +1,259 @@
+{% extends "base.html" %}
+
+{% block title %}국회정보 대시보드 - 활동 랭킹{% endblock %}
+
+{% block content %}
+<div class="row">
+    <div class="col-12 mb-4">
+        <h2>국회의원 활동 랭킹</h2>
+        <p class="lead">국회의원 활동 지표별 순위를 확인할 수 있습니다</p>
+    </div>
+</div>
+
+<div class="row mb-4">
+    <div class="col-12">
+        <div class="card">
+            <div class="card-header">
+                <h5 class="mb-0">랭킹 조건</h5>
+            </div>
+            <div class="card-body">
+                <form action="/rankings" method="get" class="row g-3">
+                    <div class="col-md-4">
+                        <label for="category" class="form-label">랭킹 기준</label>
+                        <select class="form-select" id="category" name="category" onchange="this.form.submit()">
+                            <option value="activity" {% if category == "activity" %}selected{% endif %}>종합 활동 점수</option>
+                            <option value="bills" {% if category == "bills" %}selected{% endif %}>발의안 수</option>
+                            <option value="speeches" {% if category == "speeches" %}selected{% endif %}>발언 횟수</option>
+                            <option value="attendance" {% if category == "attendance" %}selected{% endif %}>출석률</option>
+                        </select>
+                    </div>
+                    <div class="col-md-4">
+                        <label for="party" class="form-label">정당</label>
+                        <select class="form-select" id="party" name="party" onchange="this.form.submit()">
+                            <option value="">전체</option>
+                            <option value="국민의힘" {% if party == "국민의힘" %}selected{% endif %}>국민의힘</option>
+                            <option value="더불어민주당" {% if party == "더불어민주당" %}selected{% endif %}>더불어민주당</option>
+                            <option value="정의당" {% if party == "정의당" %}selected{% endif %}>정의당</option>
+                            <option value="기본소득당" {% if party == "기본소득당" %}selected{% endif %}>기본소득당</option>
+                            <option value="무소속" {% if party == "무소속" %}selected{% endif %}>무소속</option>
+                        </select>
+                    </div>
+                    <div class="col-md-4">
+                        <label for="limit" class="form-label">표시 인원</label>
+                        <select class="form-select" id="limit" name="limit" onchange="this.form.submit()">
+                            <option value="20" {% if limit == 20 %}selected{% endif %}>20명</option>
+                            <option value="50" {% if limit == 50 %}selected{% endif %}>50명</option>
+                            <option value="100" {% if limit == 100 %}selected{% endif %}>100명</option>
+                            <option value="300" {% if limit == 300 %}selected{% endif %}>전체</option>
+                        </select>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="row">
+    <div class="col-md-8">
+        <div class="card">
+            <div class="card-header d-flex justify-content-between align-items-center">
+                <h5 class="mb-0">
+                    {% if category == "bills" %}
+                    발의안 수 랭킹
+                    {% elif category == "speeches" %}
+                    발언 횟수 랭킹
+                    {% elif category == "attendance" %}
+                    출석률 랭킹
+                    {% else %}
+                    종합 활동 점수 랭킹
+                    {% endif %}
+                </h5>
+                <div>
+                    <button class="btn btn-sm btn-outline-secondary">엑셀 다운로드</button>
+                </div>
+            </div>
+            <div class="card-body">
+                <div class="table-responsive">
+                    <table class="table table-hover">
+                        <thead>
+                            <tr>
+                                <th scope="col">순위</th>
+                                <th scope="col">이름</th>
+                                <th scope="col">정당</th>
+                                <th scope="col">지역구</th>
+                                {% if category == "bills" %}
+                                <th scope="col">발의안 수</th>
+                                {% elif category == "speeches" %}
+                                <th scope="col">발언 횟수</th>
+                                {% elif category == "attendance" %}
+                                <th scope="col">출석률</th>
+                                {% else %}
+                                <th scope="col">활동 점수</th>
+                                {% endif %}
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for i in range(20) %}
+                            <tr {% if i < 3 %}class="table-warning"{% endif %}>
+                                <td class="text-center fw-bold">{{ i+1 }}</td>
+                                <td><a href="/members/{{ i+1 }}">김의원{{ i+1 }}</a></td>
+                                <td>
+                                    {% if i % 2 == 0 %}
+                                    <span class="badge bg-danger">국민의힘</span>
+                                    {% else %}
+                                    <span class="badge bg-primary">더불어민주당</span>
+                                    {% endif %}
+                                </td>
+                                <td>서울 강남구</td>
+                                {% if category == "bills" %}
+                                <td class="text-center">{{ 50 - i*1.5 }}</td>
+                                {% elif category == "speeches" %}
+                                <td class="text-center">{{ 200 - i*5 }}</td>
+                                {% elif category == "attendance" %}
+                                <td class="text-center">{{ 100 - i*0.5 }}%</td>
+                                {% else %}
+                                <td class="text-center">{{ 95 - i*1.2 }}</td>
+                                {% endif %}
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <div class="col-md-4">
+        <div class="card mb-4">
+            <div class="card-header">
+                <h5 class="mb-0">정당별 평균</h5>
+            </div>
+            <div class="card-body">
+                <canvas id="partyAverageChart" height="300"></canvas>
+            </div>
+        </div>
+        
+        <div class="card">
+            <div class="card-header">
+                <h5 class="mb-0">통계 정보</h5>
+            </div>
+            <div class="card-body">
+                <ul class="list-group list-group-flush">
+                    <li class="list-group-item d-flex justify-content-between">
+                        <span>전체 평균</span>
+                        {% if category == "bills" %}
+                        <span>24.5건</span>
+                        {% elif category == "speeches" %}
+                        <span>95.2회</span>
+                        {% elif category == "attendance" %}
+                        <span>85.7%</span>
+                        {% else %}
+                        <span>76.8점</span>
+                        {% endif %}
+                    </li>
+                    <li class="list-group-item d-flex justify-content-between">
+                        <span>최고</span>
+                        {% if category == "bills" %}
+                        <span>50건 (김의원1)</span>
+                        {% elif category == "speeches" %}
+                        <span>200회 (김의원1)</span>
+                        {% elif category == "attendance" %}
+                        <span>100% (김의원1)</span>
+                        {% else %}
+                        <span>95점 (김의원1)</span>
+                        {% endif %}
+                    </li>
+                    <li class="list-group-item d-flex justify-content-between">
+                        <span>최저</span>
+                        {% if category == "bills" %}
+                        <span>3건 (박의원99)</span>
+                        {% elif category == "speeches" %}
+                        <span>12회 (박의원99)</span>
+                        {% elif category == "attendance" %}
+                        <span>52% (박의원99)</span>
+                        {% else %}
+                        <span>42점 (박의원99)</span>
+                        {% endif %}
+                    </li>
+                    <li class="list-group-item d-flex justify-content-between">
+                        <span>상위 10% 평균</span>
+                        {% if category == "bills" %}
+                        <span>38.2건</span>
+                        {% elif category == "speeches" %}
+                        <span>165.4회</span>
+                        {% elif category == "attendance" %}
+                        <span>97.5%</span>
+                        {% else %}
+                        <span>88.6점</span>
+                        {% endif %}
+                    </li>
+                </ul>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+<!-- 아래 오류 표시는 실제 실행엔 문제 없음. Jinja 템플릿 문법을 일반 자바스크립트로 해석하려고 해서 오류처럼 보임임-->
+{% block extra_js %}
+<script>
+    // 정당별 평균 차트
+    const partyAverageCtx = document.getElementById('partyAverageChart').getContext('2d');
+    const partyAverageChart = new Chart(partyAverageCtx, {
+        type: 'bar',
+        data: {
+            labels: ['국민의힘', '더불어민주당', '정의당', '기본소득당', '무소속'],
+            datasets: [{
+                label: '{% if category == "bills" %}발의안 수{% elif category == "speeches" %}발언 횟수{% elif category == "attendance" %}출석률{% else %}활동 점수{% endif %}',
+                data: [
+                    {% if category == "bills" %}
+                    25.4, 23.7, 28.6, 22.0, 17.8
+                    {% elif category == "speeches" %}
+                    96.7, 94.2, 112.5, 87.3, 65.4
+                    {% elif category == "attendance" %}
+                    86.3, 85.2, 91.7, 88.5, 79.3
+                    {% else %}
+                    77.5, 76.2, 82.6, 75.4, 69.8
+                    {% endif %}
+                ],
+                backgroundColor: [
+                    'rgba(255, 99, 132, 0.7)',
+                    'rgba(54, 162, 235, 0.7)',
+                    'rgba(255, 206, 86, 0.7)',
+                    'rgba(75, 192, 192, 0.7)',
+                    'rgba(153, 102, 255, 0.7)'
+                ],
+                borderColor: [
+                    'rgba(255, 99, 132, 1)',
+                    'rgba(54, 162, 235, 1)',
+                    'rgba(255, 206, 86, 1)',
+                    'rgba(75, 192, 192, 1)',
+                    'rgba(153, 102, 255, 1)'
+                ],
+                borderWidth: 1
+            }]
+        },
+        options: {
+            scales: {
+                y: {
+                    beginAtZero: true,
+                    {% if category == "attendance" %}
+                    max: 100,
+                    ticks: {
+                        callback: function(value) {
+                            return value + '%';
+                        }
+                    }
+                    {% endif %}
+                }
+            },
+            plugins: {
+                legend: {
+                    display: false
+                }
+            }
+        }
+    });
+</script>
+{% endblock %}
+
