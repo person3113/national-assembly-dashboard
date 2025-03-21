@@ -1,0 +1,75 @@
+/* 기본 스타일 */
+body {
+    font-family: 'Noto Sans KR', sans-serif;
+    background-color: #f8f9fa;
+    color: #343a40;
+}
+
+.navbar-brand {
+    font-weight: 700;
+}
+
+.card {
+    margin-bottom: 20px;
+    border-radius: 0.5rem;
+    box-shadow: 0 0.125rem 0.25rem rgba(0, 0, 0, 0.075);
+}
+
+.card-header {
+    background-color: #f8f9fa;
+    font-weight: 600;
+}
+
+/* 국회의원 카드 스타일 */
+.member-card img {
+    max-width: 150px;
+    border-radius: 50%;
+    margin: 0 auto;
+    display: block;
+    box-shadow: 0 0.5rem 1rem rgba(0, 0, 0, 0.15);
+}
+
+/* 정당 색상 */
+.badge.bg-국민의힘 {
+    background-color: #e03131 !important;
+}
+
+.badge.bg-더불어민주당 {
+    background-color: #1971c2 !important;
+}
+
+.badge.bg-정의당 {
+    background-color: #f59f00 !important;
+    color: #343a40 !important;
+}
+
+/* 표 스타일 */
+.table {
+    font-size: 0.9rem;
+}
+
+.table th {
+    font-weight: 600;
+    background-color: #f8f9fa;
+}
+
+/* 차트 컨테이너 */
+.chart-container {
+    height: 300px;
+    position: relative;
+}
+
+/* 푸터 */
+footer {
+    margin-top: 3rem;
+    padding: 2rem 0;
+    background-color: #343a40;
+    color: #f8f9fa;
+}
+
+/* 반응형 */
+@media (max-width: 768px) {
+    .chart-container {
+        height: 250px;
+    }
+}

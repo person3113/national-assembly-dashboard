@@ -21,7 +21,9 @@
             <div class="card-body text-center">
                 <img src="/static/images/profile-placeholder.jpg" alt="{{ member.name }}" class="img-fluid rounded-circle mb-3" style="max-width: 150px;">
                 <h3>{{ member.name }}</h3>
+                {% if member.eng_name %}
                 <p class="text-muted">{{ member.eng_name }}</p>
+                {% endif %}
                 
                 <div class="mb-3">
                     <span class="badge bg-primary">{{ member.party }}</span>
@@ -44,26 +46,87 @@
                 </div>
             </div>
             <ul class="list-group list-group-flush">
+                <!-- 생년월일 -->
                 <li class="list-group-item d-flex justify-content-between">
                     <span>생년월일</span>
-                    <span>1970년 1월 1일</span>
+                    <span>
+                        {% if member.birth_date %}
+                            {{ member.birth_date.strftime('%Y년 %m월 %d일') }}
+                            {% if member.birth_gbn %}({{ member.birth_gbn }}){% endif %}
+                        {% else %}
+                            정보 없음
+                        {% endif %}
+                    </span>
                 </li>
+                
+                <!-- 소속위원회 -->
                 <li class="list-group-item d-flex justify-content-between">
                     <span>소속위원회</span>
-                    <span>기획재정위원회</span>
+                    <span>
+                        {% if member.committee %}
+                            {{ member.committee }}
+                        {% else %}
+                            정보 없음
+                        {% endif %}
+                    </span>
                 </li>
+                
+                <!-- 당선 횟수 -->
                 <li class="list-group-item d-flex justify-content-between">
                     <span>당선 횟수</span>
-                    <span>3선</span>
+                    <span>
+                        {% if member.reele_gbn %}
+                            {{ member.reele_gbn }}
+                        {% elif member.units %}
+                            {{ member.units }}
+                        {% else %}
+                            정보 없음
+                        {% endif %}
+                    </span>
                 </li>
+                
+                <!-- 연락처 정보 추가 -->
+                {% if member.tel_no %}
+                <li class="list-group-item d-flex justify-content-between">
+                    <span>전화번호</span>
+                    <span>{{ member.tel_no }}</span>
+                </li>
+                {% endif %}
+                
+                {% if member.email %}
+                <li class="list-group-item d-flex justify-content-between">
+                    <span>이메일</span>
+                    <span>{{ member.email }}</span>
+                </li>
+                {% endif %}
+                
+                {% if member.homepage %}
+                <li class="list-group-item d-flex justify-content-between">
+                    <span>홈페이지</span>
+                    <span>
+                        <a href="{{ member.homepage }}" target="_blank">바로가기</a>
+                    </span>
+                </li>
+                {% endif %}
+                
+                <!-- 활동 점수 -->
                 <li class="list-group-item d-flex justify-content-between">
                     <span>활동 점수</span>
-                    <span class="badge bg-success">95점</span>
+                    <span class="badge bg-success">{{ member.activity_score }}</span>
                 </li>
             </ul>
+            
+            <!-- 소속 위원회 목록 -->
+            {% if member.committees %}
+            <div class="card-body">
+                <h6 class="card-subtitle mb-2 text-muted">소속 위원회 목록</h6>
+                <p class="card-text">{{ member.committees }}</p>
+            </div>
+            {% endif %}
         </div>
     </div>
     
+    <!-- 여기서부터는 기존 코드와 동일 (활동 요약, 발의안, 발언 등) -->
     <div class="col-md-8">
         <div class="card mb-4">
             <div class="card-header">
@@ -81,16 +144,29 @@
             </div>
             <div class="card-body">
                 <div class="list-group">
-                    {% for i in range(5) %}
-                    <a href="#" class="list-group-item list-group-item-action">
-                        <div class="d-flex w-100 justify-content-between">
-                            <h6 class="mb-1">발의안 제목 {{ i+1 }}</h6>
-                            <small>2024-03-{{ 15-i }}</small>
-                        </div>
-                        <p class="mb-1">발의안 요약 내용이 표시됩니다...</p>
-                        <small class="text-muted">공동발의: 15명</small>
-                    </a>
-                    {% endfor %}
+                    {% if bills %}
+                        {% for bill in bills %}
+                        <a href="/bills/{{ bill.id }}" class="list-group-item list-group-item-action">
+                            <div class="d-flex w-100 justify-content-between">
+                                <h6 class="mb-1">{{ bill.title }}</h6>
+                                <small>{{ bill.proposal_date }}</small>
+                            </div>
+                            <p class="mb-1">{{ bill.content|truncate(100) }}</p>
+                            <small class="text-muted">공동발의: {{ bill.co_proposers|default('정보 없음') }}</small>
+                        </a>
+                        {% endfor %}
+                    {% else %}
+                        {% for i in range(5) %}
+                        <a href="#" class="list-group-item list-group-item-action">
+                            <div class="d-flex w-100 justify-content-between">
+                                <h6 class="mb-1">발의안 데이터가 없습니다 {{ i+1 }}</h6>
+                                <small>2024-03-{{ 15-i }}</small>
+                            </div>
+                            <p class="mb-1">발의안 상세 정보를 불러올 수 없습니다.</p>
+                            <small class="text-muted">데이터 준비 중...</small>
+                        </a>
+                        {% endfor %}
+                    {% endif %}
                 </div>
             </div>
         </div>
@@ -102,19 +178,35 @@
             </div>
             <div class="card-body">
                 <div class="list-group">
-                    {% for i in range(5) %}
-                    <div class="list-group-item">
-                        <div class="d-flex w-100 justify-content-between">
-                            <h6 class="mb-1">{{ ["본회의", "상임위원회", "국정감사", "법안심사소위원회", "예산결산심사소위원회"][i] }}</h6>
-                            <small>2024-03-{{ 10-i }}</small>
+                    {% if speeches %}
+                        {% for speech in speeches %}
+                        <div class="list-group-item">
+                            <div class="d-flex w-100 justify-content-between">
+                                <h6 class="mb-1">{{ speech.meeting_type }}</h6>
+                                <small>{{ speech.date }}</small>
+                            </div>
+                            <p class="mb-1">{{ speech.content }}</p>
+                            <div class="d-flex justify-content-between align-items-center mt-2">
+                                <small class="text-muted">주제: {{ speech.topic }}</small>
+                                <a href="{{ speech.link }}" class="btn btn-sm btn-outline-secondary">전체보기</a>
+                            </div>
                         </div>
-                        <p class="mb-1">발언 내용 일부가 표시됩니다. 해당 안건과 관련하여 저는 이러한 의견을 가지고 있습니다...</p>
-                        <div class="d-flex justify-content-between align-items-center mt-2">
-                            <small class="text-muted">주제: {{ ["경제", "환경", "복지", "교육", "안보"][i] }}</small>
-                            <a href="#" class="btn btn-sm btn-outline-secondary">전체보기</a>
+                        {% endfor %}
+                    {% else %}
+                        {% for i in range(5) %}
+                        <div class="list-group-item">
+                            <div class="d-flex w-100 justify-content-between">
+                                <h6 class="mb-1">{{ ["본회의", "상임위원회", "국정감사", "법안심사소위원회", "예산결산심사소위원회"][i] }}</h6>
+                                <small>2024-03-{{ 10-i }}</small>
+                            </div>
+                            <p class="mb-1">발언 내용 일부가 표시됩니다. 해당 안건과 관련하여 저는 이러한 의견을 가지고 있습니다...</p>
+                            <div class="d-flex justify-content-between align-items-center mt-2">
+                                <small class="text-muted">주제: {{ ["경제", "환경", "복지", "교육", "안보"][i] }}</small>
+                                <a href="#" class="btn btn-sm btn-outline-secondary">전체보기</a>
+                            </div>
                         </div>
-                    </div>
-                    {% endfor %}
+                        {% endfor %}
+                    {% endif %}
                 </div>
             </div>
         </div>
@@ -132,14 +224,34 @@
             labels: ['발의안', '출석율', '발언 횟수', '법안통과율', '상임위 활동'],
             datasets: [{
                 label: '{{ member.name }} 의원',
-                data: [85, 95, 90, 75, 88],
+                data: [
+                    {% if activity_data %}
+                        {{ activity_data.member.bills }}, 
+                        {{ activity_data.member.attendance }}, 
+                        {{ activity_data.member.speeches }}, 
+                        {{ activity_data.member.pass_rate }}, 
+                        {{ activity_data.member.committee }}
+                    {% else %}
+                        85, 95, 90, 75, 88
+                    {% endif %}
+                ],
                 backgroundColor: 'rgba(54, 162, 235, 0.2)',
                 borderColor: 'rgba(54, 162, 235, 1)',
                 borderWidth: 2,
                 pointBackgroundColor: 'rgba(54, 162, 235, 1)',
             }, {
                 label: '전체 평균',
-                data: [70, 80, 65, 60, 75],
+                data: [
+                    {% if activity_data %}
+                        {{ activity_data.average.bills }}, 
+                        {{ activity_data.average.attendance }}, 
+                        {{ activity_data.average.speeches }}, 
+                        {{ activity_data.average.pass_rate }}, 
+                        {{ activity_data.average.committee }}
+                    {% else %}
+                        70, 80, 65, 60, 75
+                    {% endif %}
+                ],
                 backgroundColor: 'rgba(255, 99, 132, 0.2)',
                 borderColor: 'rgba(255, 99, 132, 1)',
                 borderWidth: 2,

@@ -43,9 +43,20 @@ class AssemblyAPI:
             if "RESULT" in result and result["RESULT"]["CODE"] != "INFO-000":
                 error_code = result["RESULT"]["CODE"]
                 error_msg = result["RESULT"]["MESSAGE"]
-                logger.error(f"API 오류 응답: {error_code}, {error_msg}")
-                raise Exception(f"API 오류: {error_code}, {error_msg}")
                 
+                # 데이터 없음 코드는 오류로 처리하지 않고 빈 결과로 처리
+                if error_code == "INFO-200" and "해당하는 데이터가 없습니다" in error_msg:
+                    logger.info(f"API 응답: {error_code}, {error_msg} - 데이터 없음으로 처리")
+                    # 데이터가 없는 경우 빈 결과 구조 반환
+                    if endpoint == "ALLBILL":
+                        return {"ALLBILL": {"row": []}}
+                    else:
+                        return {endpoint: [{"header": {}}, {"row": []}]}
+                else:
+                    # 기타 오류는 로깅하고 예외 발생
+                    logger.error(f"API 오류 응답: {error_code}, {error_msg}")
+                    raise Exception(f"API 오류: {error_code}, {error_msg}")
+                    
             return result
             
         except requests.exceptions.RequestException as e:
@@ -64,9 +75,9 @@ class AssemblyAPI:
             raise
     
     def get_members(self, 
-               assembly_term: int = 22,  # 22대 국회 기본값
-               name: Optional[str] = None,
-               party: Optional[str] = None) -> List[Dict]:
+                assembly_term: int = 22,  # 22대 국회 기본값
+                name: Optional[str] = None,
+                party: Optional[str] = None) -> List[Dict]:
         """국회의원 인적사항 조회"""
         endpoint = "nwvrqwxyaytdsfvhu"  # 국회의원 인적사항 API 엔드포인트
         
@@ -90,6 +101,16 @@ class AssemblyAPI:
                 # 실제 API 응답 구조 확인
                 if endpoint in response_data and len(response_data[endpoint]) > 1:
                     members_data = response_data[endpoint][1]["row"]
+                    
+                    # 디버깅: 첫 번째 의원 데이터의 모든 필드 출력
+                    if len(members_data) > 0:
+                        first_member = members_data[0]
+                        logger.info(f"첫 번째 의원 데이터 필드: {list(first_member.keys())}")
+                        logger.info(f"첫 번째 의원 생년월일 관련 필드:")
+                        for key in first_member.keys():
+                            if "DATE" in key or "BTH" in key or "birth" in key.lower():
+                                logger.info(f"  {key}: {first_member[key]}")
+                    
                     return members_data
                 else:
                     # 응답 구조가 다른 경우 전체 응답 로깅
@@ -123,24 +144,32 @@ class AssemblyAPI:
             "pSize": page_size          # 페이지 당 요청 숫자 (필수)
         }
         
-        # 의안번호(BILL_NO)는 필수 파라미터
-        if bill_no:
-            params["BILL_NO"] = bill_no
-        else:
-            # 테스트용 기본 의안번호 (최근 20대 국회 의안번호 중 하나)
-            params["BILL_NO"] = "2123836"  # 명세서 예시의 의안번호 사용
-        
-        # 필터링 옵션 추가 (명세서에 따라 선택적 파라미터 추가)
-        if bill_id:
-            params["BILL_ID"] = bill_id    # 의안ID(선택)
+        # 제안자 처리 - PPSR_KND가 아닌 PPSR_NM 사용 (API 명세서 확인 필요)
+        if proposer:
+            params["PPSR_NM"] = proposer  # 제안자명 
+
+        # bill_no 사용여부 결정
         if bill_name:
             params["BILL_NM"] = bill_name  # 의안명(선택)
-        if proposer:
-            params["PPSR_KND"] = proposer  # 제안자구분(선택)
+        elif bill_no:
+            params["BILL_NO"] = bill_no  # 의안번호
+        else:
+            # 의안번호 없이 검색하려면 다른 조건 필요
+            # 모든 의안을 불러오고 싶은 경우 특정 기간 지정
+            if not start_date:
+                # 기본 기간 설정 (예: 22대 국회 개원일부터 현재까지)
+                start_date = "20240530"  # 22대 국회 개원일
+            params["AGE"] = assembly_term  # 국회대수 추가
+        
+        # 나머지 선택적 파라미터 추가
+        if bill_id:
+            params["BILL_ID"] = bill_id    # 의안ID(선택)
         if start_date:
-            params["PPSL_DT"] = start_date # 제안일(선택)
+            params["PROPOSE_FROM"] = start_date # 제안일(시작)
+        if end_date:
+            params["PROPOSE_TO"] = end_date     # 제안일(종료)
         if committee:
-            params["JRCMIT_NM"] = committee # 소관위원회명(선택)
+            params["COMMITTEE"] = committee     # 소관위원회명(선택)
             
         try:
             response_data = self._make_request(endpoint, params)
@@ -163,6 +192,11 @@ class AssemblyAPI:
                     logger.error(f"응답에서 'row' 키를 찾을 수 없음: {response_data}")
                     return []
                 else:
+                    # "해당하는 데이터가 없습니다." 메시지 처리
+                    if "RESULT" in response_data and response_data["RESULT"]["CODE"] == "INFO-200":
+                        logger.info(f"발의안 검색 결과 없음: {params}")
+                        return []
+                        
                     logger.error(f"API 응답 구조 예상과 다름: {response_data}")
                     return []
             except (KeyError, IndexError, TypeError) as e:
@@ -305,12 +339,13 @@ class AssemblyAPI:
             return []
     
     def get_speech_records(self, 
-                          assembly_term: int = 22,
-                          member_name: Optional[str] = None,
-                          start_date: Optional[str] = None,
-                          end_date: Optional[str] = None) -> List[Dict]:
+                      assembly_term: int = 22,
+                      member_name: Optional[str] = None,
+                      start_date: Optional[str] = None,
+                      end_date: Optional[str] = None) -> List[Dict]:
         """국회의원 영상회의록(발언영상) 조회"""
-        endpoint = "nzmimeepazxkubdph"  # 국회의원 영상회의록 API 엔드포인트
+        # API 엔드포인트 확인 필요
+        endpoint = "npeslxqbanwkimebr"  # 국회의원 영상회의록 API 엔드포인트 수정
         
         # 날짜 기본값 설정 (없을 경우)
         if not start_date:
@@ -320,25 +355,33 @@ class AssemblyAPI:
             end_date = today  # 오늘까지
         
         params = {
-            "ASSEMBLY": assembly_term,  # 대수
-            "SD": start_date,           # 시작일
-            "ED": end_date,             # 종료일
+            "CT1": str(assembly_term),  # 대수 (필수)
+            "TAKING_DATE": start_date,  # 회의일자 (필수)
             "pIndex": 1,                # 페이지 번호
             "pSize": 100                # 한 페이지 결과 수
         }
         
         # 특정 의원 이름이 제공된 경우 추가
         if member_name:
-            params["SPKR_NM"] = member_name
-            
-        response_data = self._make_request(endpoint, params)
-        
-        # API 응답에서 발언영상 정보 추출
+            params["ESSENTIAL_PERSON"] = member_name  # 발언자
+                
         try:
-            speech_data = response_data["nzmimeepazxkubdph"][1]["row"]
-            return speech_data
-        except (KeyError, IndexError) as e:
-            print(f"API 응답 파싱 오류: {e}")
+            response_data = self._make_request(endpoint, params)
+            
+            # API 응답에서 발언영상 정보 추출
+            try:
+                # API 응답 구조 확인 필요
+                if endpoint in response_data and len(response_data[endpoint]) > 1:
+                    speech_data = response_data[endpoint][1]["row"]
+                    return speech_data
+                else:
+                    logger.warning(f"API 응답에서 발언 데이터를 찾을 수 없음: {response_data}")
+                    return []
+            except (KeyError, IndexError) as e:
+                logger.error(f"API 응답 파싱 오류: {e}")
+                return []
+        except Exception as e:
+            logger.error(f"발언 정보 조회 중 오류: {str(e)}")
             return []
 
 # 서비스 인스턴스 생성

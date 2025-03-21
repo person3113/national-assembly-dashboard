@@ -1,6 +1,8 @@
 import logging  
 import pprint
-import requests  # Add this import
+import requests 
+import asyncio
+import time  # asyncio 대체용
 
 from fastapi import FastAPI, Request, Depends, HTTPException  # HTTPException 추가
 from fastapi.staticfiles import StaticFiles
@@ -125,24 +127,213 @@ def insert_initial_data(db: Session):
     
     db.commit()
 
+async def sync_member_bills(db: Session):
+    """국회의원별 발의안 정보를 API에서 가져와 DB에 저장"""
+    try:
+        logger.info("국회의원 발의안 정보 동기화 시작...")
+        
+        # 현재 데이터베이스의 모든 국회의원 조회
+        members = db.query(MemberModel).all()
+        
+        # 총 처리된 발의안 수 카운터
+        total_bills = 0
+        
+        for member in members:
+            logger.info(f"{member.name} 의원의 발의안 정보 조회 중...")
+            
+            # 기존 발의안 삭제 (재동기화)
+            db.query(BillModel).filter(BillModel.proposer_id == member.id).delete()
+            
+            # API에서 해당 의원이 발의한 법안 조회
+            try:
+                # API 호출 방식 수정 - PPSR_NM 파라미터 사용 (직접 테스트 필요)
+                # 현재는 의원명이 아닌 의안번호로 API 호출하고 있음
+                bills_data = []
+                
+                # 모든 국회의원에게 발의안이 없을 수 있으므로 에러 발생 시에도 진행
+                try:
+                    # 22대 국회 시작일부터 현재까지 기간 설정
+                    start_date = "20240530"  # 22대 국회 시작일
+                    end_date = datetime.now().strftime("%Y%m%d")
+                    
+                    # API 호출 - 의원 이름으로 검색 (API 문서 확인 필요)
+                    bills_data = assembly_api.get_bills(
+                        bill_name="",  # 빈 값으로 설정
+                        proposer=member.name,  # 제안자 이름
+                        start_date=start_date,
+                        end_date=end_date
+                    )
+                except Exception as api_error:
+                    logger.warning(f"{member.name} 의원의 발의안 조회 중 API 오류: {api_error}")
+                    bills_data = []  # 오류 발생 시 빈 리스트로 설정
+                
+                # 발의안 수 업데이트
+                member.num_bills = len(bills_data)
+                
+                # 각 발의안 데이터 처리
+                for bill_data in bills_data[:10]:  # 최근 10개만 저장
+                    try:
+                        # 날짜 포맷 변환
+                        proposal_date = None
+                        if bill_data.get("PPSL_DT"):
+                            try:
+                                proposal_date = datetime.strptime(
+                                    bill_data.get("PPSL_DT"), "%Y-%m-%d"
+                                ).date()
+                            except ValueError:
+                                proposal_date = datetime.now().date()
+                        
+                        # 발의안 저장
+                        new_bill = BillModel(
+                            title=bill_data.get("BILL_NM", "제목 없음"),
+                            proposer=member.name,
+                            status=bill_data.get("PROC_RESULT", "계류"),
+                            committee=bill_data.get("COMMITTEE", "정보 없음"),
+                            proposal_date=proposal_date or datetime.now().date(),
+                            content=bill_data.get("DETAIL_CONTENT", "내용 없음"),
+                            co_proposers=bill_data.get("PUBL_PROPOSER", ""),
+                            proposer_id=member.id
+                        )
+                        db.add(new_bill)
+                        total_bills += 1
+                    except Exception as e:
+                        logger.error(f"발의안 데이터 처리 중 오류: {e}")
+                
+            except Exception as e:
+                logger.error(f"{member.name} 의원의 발의안 조회 중 오류: {e}")
+                # 오류 발생 시에도 계속 진행
+                continue
+            
+            # API 호출 간 지연 (asyncio 대신 time.sleep 사용)
+            # await asyncio.sleep(1) 대신 다음 코드 사용
+            time.sleep(0.5)
+        
+        # 모든 국회의원 처리 후 커밋
+        db.commit()
+        logger.info(f"국회의원 발의안 정보 동기화 완료. 총 {total_bills}개 발의안 처리됨.")
+        
+    except Exception as e:
+        db.rollback()
+        logger.error(f"발의안 정보 동기화 중 오류 발생: {e}")
+
 # 애플리케이션 시작 시 초기 데이터 삽입
 @app.on_event("startup")
-async def startup_event():
-    """애플리케이션 시작 시 기본 설정 및 초기 데이터 준비"""
-    # 데이터베이스에 레코드가 없는 경우만 초기 데이터 삽입
+def startup_event():
+    """애플리케이션 시작 시 국회의원 데이터를 API에서 불러와 초기 데이터 준비"""
     db = next(get_db())
     try:
+        # API 키 확인
+        api_key = settings.ASSEMBLY_API_KEY
+        if not api_key or api_key == "":
+            logger.warning("API 키가 설정되지 않았습니다. 샘플 데이터를 사용합니다.")
+            # API 키가 없을 경우 샘플 데이터 사용
+            members_count = db.query(MemberModel).count()
+            if members_count == 0:
+                insert_initial_data(db)
+                logger.info("샘플 데이터 삽입 완료")
+            return
+        
+        # API에서 국회의원 목록 조회
+        logger.info("API에서 국회의원 데이터를 불러오는 중...")
+        members_data = assembly_api.get_members(assembly_term=22)  # 22대 국회의원 기본값
+        
+        if not members_data:
+            logger.warning("API에서 데이터를 가져오지 못했습니다. 샘플 데이터를 사용합니다.")
+            members_count = db.query(MemberModel).count()
+            if members_count == 0:
+                insert_initial_data(db)
+            return
+        
+        # 기존 데이터 확인 - 이미 데이터가 있으면 삭제 후 새로 추가
+        existing_count = db.query(MemberModel).count()
+        if existing_count > 0:
+            logger.info(f"기존 {existing_count}개의 국회의원 데이터를 삭제합니다.")
+            db.query(MemberModel).delete()
+        
+        # API 데이터 추가
+        member_count = 0
+        for member_data in members_data:
+            try:
+                # 생년월일 변환
+                birth_date = None
+                if member_data.get("BTH_DATE"):
+                    try:
+                        birth_date_str = member_data.get("BTH_DATE")
+                        
+                        # 날짜 형식 확인 및 변환
+                        if "-" in birth_date_str:  # YYYY-MM-DD 형식
+                            birth_date = datetime.strptime(birth_date_str, "%Y-%m-%d").date()
+                        elif len(birth_date_str) == 8:  # YYYYMMDD 형식
+                            birth_date = datetime.strptime(birth_date_str, "%Y%m%d").date()
+                        else:
+                            # 다른 형식이 있을 경우 로그만 남기고 계속 진행
+                            logger.warning(f"지원하지 않는 생년월일 형식: {birth_date_str}")
+                    except (ValueError, TypeError) as e:
+                        logger.warning(f"생년월일 변환 오류 ({birth_date_str}): {e}")
+                
+                # 국회의원 데이터 생성
+                new_member = MemberModel(
+                    name=member_data.get("HG_NM", ""),  # 이름
+                    hanja_name=member_data.get("HJ_NM", ""),  # 한자명
+                    eng_name=member_data.get("ENG_NM", ""),  # 영문명
+                    birth_date=birth_date,  # 생년월일
+                    birth_gbn=member_data.get("BTH_GBN_NM", ""),  # 음/양력
+                    party=member_data.get("POLY_NM", ""),  # 정당명
+                    district=member_data.get("ORIG_NM", ""),  # 선거구
+                    position=member_data.get("JOB_RES_NM", ""),  # 직책명
+                    
+                    # 추가 필드
+                    committee=member_data.get("CMIT_NM", ""),  # 대표 위원회
+                    committees=member_data.get("CMITS", ""),  # 소속 위원회 목록
+                    reele_gbn=member_data.get("REELE_GBN_NM", ""),  # 재선 구분
+                    units=member_data.get("UNITS", ""),  # 당선 수
+                    
+                    # 연락처 정보
+                    tel_no=member_data.get("TEL_NO", ""),  # 전화번호
+                    email=member_data.get("E_MAIL", ""),  # 이메일
+                    homepage=member_data.get("HOMEPAGE", ""),  # 홈페이지
+                    
+                    # 기본값
+                    num_bills=0,
+                    attendance_rate=0.0,
+                    speech_count=0,
+                    activity_score=0.0,
+                    is_active=True,
+                    last_updated=datetime.now().date()
+                )
+                db.add(new_member)
+                member_count += 1
+            except Exception as e:
+                logger.error(f"국회의원 데이터 추가 중 오류: {e}")
+        
+        # 커밋
+        db.commit()
+        logger.info(f"API에서 {member_count}명의 국회의원 데이터를 성공적으로 불러왔습니다.")
+        
+        # 활동 점수 계산 및 발의안 동기화
+        try:
+            # 활동 점수 계산
+            members = db.query(MemberModel).all()
+            for member in members:
+                member.activity_score = calculate_activity_score(member)
+            db.commit()
+            
+            # 발의안 정보 동기화 (비동기 함수를 일반 함수로 호출)
+            sync_member_bills(db)
+        except Exception as e:
+            logger.error(f"활동 점수 계산 및 발의안 동기화 중 오류: {e}")
+        
+    except Exception as e:
+        db.rollback()
+        logger.error(f"초기화 중 오류 발생: {e}")
+        # 오류 발생 시 기본 데이터 확인
         members_count = db.query(MemberModel).count()
         if members_count == 0:
-            # 데이터가 없는 경우 샘플 데이터 추가
-            insert_initial_data(db)
-            
-            # 로그 출력
-            logger.info("초기 샘플 데이터 삽입 완료")
-        else:
-            logger.info(f"기존 데이터 유지: {members_count}개의 국회의원 데이터가 존재합니다")
-    except Exception as e:
-        logger.error(f"초기화 중 오류 발생: {e}")
+            try:
+                insert_initial_data(db)
+                logger.info("오류 발생으로 샘플 데이터 삽입 완료")
+            except Exception as e2:
+                logger.error(f"샘플 데이터 삽입 중 오류: {e2}")
     finally:
         db.close()
 
@@ -214,15 +405,94 @@ async def member_detail_page(
     member_id: int,
     db: Session = Depends(get_db)
 ):
+    """국회의원 상세 정보 페이지"""
     # 특정 국회의원 조회
     member = db.query(MemberModel).filter(MemberModel.id == member_id).first()
     if not member:
         raise HTTPException(status_code=404, detail="국회의원을 찾을 수 없습니다")
     
-    return templates.TemplateResponse(
-        "member_detail.html", 
-        {"request": request, "member": member}
-    )
+    # 추가 데이터 수집
+    try:
+        # 국회의원 발의안 목록 조회 (최근 5개)
+        bills = db.query(BillModel).filter(BillModel.proposer_id == member_id).order_by(BillModel.proposal_date.desc()).limit(5).all()
+        
+        # 발언 목록 가져오기 (API 호출)
+        speech_data = []
+        try:
+            # API에서 해당 의원의 발언 데이터 조회 - API 엔드포인트 수정됨
+            speech_records = assembly_api.get_speech_records(member_name=member.name)
+            # 최근 5개만 선택
+            speech_data = speech_records[:5] if len(speech_records) > 0 else []
+            logger.info(f"{member.name} 의원의 발언 데이터 {len(speech_data)}개 조회 성공")
+        except Exception as e:
+            logger.error(f"발언 데이터 조회 중 오류: {e}")
+            # API 오류 시 빈 리스트로 설정
+            speech_data = []
+        
+        # 발언 데이터 포맷팅
+        speeches = []
+        for speech in speech_data:
+            speeches.append({
+                "meeting_type": speech.get("TITLE", "본회의"),  # 회의제목
+                "date": speech.get("TAKING_DATE", ""),  # 회의일자
+                "content": speech.get("CONTENT", "발언 내용이 제공되지 않습니다.")[:100] + "...",  # 내용 요약 (없으면 기본 메시지)
+                "topic": speech.get("TOPIC", "일반 발언"),  # 주제 (없으면 기본값)
+                "link": speech.get("LINK_URL", "#")  # 링크 (없으면 #)
+            })
+            
+        # 데이터 부족 시 기본 데이터로 보완
+        if len(speeches) == 0:
+            # API 응답 없을 경우 더미 데이터 제공
+            speeches = [
+                {
+                    "meeting_type": meeting_type,
+                    "date": f"2024-03-{10-i}",
+                    "content": "API에서 발언 데이터를 가져올 수 없습니다. 국회정보 API를 확인해주세요.",
+                    "topic": topic,
+                    "link": "#"
+                }
+                for i, (meeting_type, topic) in enumerate(zip(
+                    ["본회의", "상임위원회", "국정감사", "법안심사소위원회", "예산결산심사소위원회"],
+                    ["경제", "환경", "복지", "교육", "안보"]
+                ))
+            ]
+        
+        # 의원 활동 지표 계산 
+        activity_data = {
+            "member": {
+                "bills": (member.num_bills / 50) * 100 if member.num_bills else 85,  # 최대값 대비 비율 계산
+                "attendance": member.attendance_rate if member.attendance_rate else 95,
+                "speeches": (member.speech_count / 200) * 100 if member.speech_count else 90,
+                "pass_rate": member.bill_pass_rate if member.bill_pass_rate else 75,
+                "committee": 88  # 상임위 활동은 기본값 유지 (데이터 없음)
+            },
+            "average": {
+                "bills": 70,
+                "attendance": 80,
+                "speeches": 65,
+                "pass_rate": 60,
+                "committee": 75
+            }
+        }
+        
+        return templates.TemplateResponse(
+            "member_detail.html", 
+            {
+                "request": request, 
+                "member": member,
+                "bills": bills,
+                "speeches": speeches,
+                "activity_data": activity_data
+            }
+        )
+        
+    except Exception as e:
+        logger.error(f"국회의원 상세 정보 조회 중 오류: {e}")
+        # 오류 발생 시에도 기본 정보는 표시
+        return templates.TemplateResponse(
+            "member_detail.html", 
+            {"request": request, "member": member}
+        )
 
 @app.get("/rankings", response_class=HTMLResponse)
 async def rankings_page(
