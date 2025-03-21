@@ -101,7 +101,128 @@ class AssemblyAPI:
         except Exception as e:
             logger.error(f"국회의원 정보 조회 중 오류: {str(e)}")
             return []
+
+    def get_bills(self, 
+             assembly_term: int = 22,
+             bill_name: Optional[str] = None,
+             proposer: Optional[str] = None,
+             committee: Optional[str] = None,
+             start_date: Optional[str] = None,
+             end_date: Optional[str] = None,
+             bill_id: Optional[str] = None,
+             bill_no: Optional[str] = None,
+             page_index: int = 1,
+             page_size: int = 20) -> List[Dict]:
+        """국회 의안정보 조회"""
+        # 의안정보 조회 API 엔드포인트 (명세서 참조)
+        endpoint = "ALLBILL"  # 의안정보 통합 API 엔드포인트
+        
+        # 파라미터 초기화
+        params = {
+            "pIndex": page_index,       # 페이지 위치 (필수)
+            "pSize": page_size          # 페이지 당 요청 숫자 (필수)
+        }
+        
+        # 의안번호(BILL_NO)는 필수 파라미터
+        if bill_no:
+            params["BILL_NO"] = bill_no
+        else:
+            # 테스트용 기본 의안번호 (최근 20대 국회 의안번호 중 하나)
+            params["BILL_NO"] = "2123836"  # 명세서 예시의 의안번호 사용
+        
+        # 필터링 옵션 추가 (명세서에 따라 선택적 파라미터 추가)
+        if bill_id:
+            params["BILL_ID"] = bill_id    # 의안ID(선택)
+        if bill_name:
+            params["BILL_NM"] = bill_name  # 의안명(선택)
+        if proposer:
+            params["PPSR_KND"] = proposer  # 제안자구분(선택)
+        if start_date:
+            params["PPSL_DT"] = start_date # 제안일(선택)
+        if committee:
+            params["JRCMIT_NM"] = committee # 소관위원회명(선택)
             
+        try:
+            response_data = self._make_request(endpoint, params)
+            
+            # API 응답에서 의안 목록 추출
+            try:
+                # 로그로 응답 구조 확인 (디버깅용)
+                logger.info(f"API 응답 구조: {response_data.keys()}")
+                
+                # 응답 구조 확인하고 적절하게 처리
+                if "ALLBILL" in response_data and isinstance(response_data["ALLBILL"], dict) and "row" in response_data["ALLBILL"]:
+                    bills_data = response_data["ALLBILL"]["row"]
+                    return bills_data
+                elif "ALLBILL" in response_data and isinstance(response_data["ALLBILL"], list) and len(response_data["ALLBILL"]) > 0:
+                    # 리스트 형태로 반환된 경우 (인덱스 접근 방식 수정)
+                    for item in response_data["ALLBILL"]:
+                        if isinstance(item, dict) and "row" in item:
+                            return item["row"]
+                    
+                    logger.error(f"응답에서 'row' 키를 찾을 수 없음: {response_data}")
+                    return []
+                else:
+                    logger.error(f"API 응답 구조 예상과 다름: {response_data}")
+                    return []
+            except (KeyError, IndexError, TypeError) as e:
+                logger.error(f"API 응답 파싱 오류: {e}, 응답: {response_data}")
+                return []
+        except Exception as e:
+            logger.error(f"의안 정보 조회 중 오류: {str(e)}")
+            return []
+
+    def get_bill_detail(self, bill_id: str = None, bill_no: str = None) -> Dict:
+        """의안 상세정보 조회"""
+        # 의안상세정보 조회 API 엔드포인트
+        endpoint = "ALLBILL"  # 동일한 엔드포인트 사용
+        
+        # BILL_NO(의안번호)는 필수 파라미터
+        if not bill_no:
+            logger.error("의안번호(BILL_NO)가 필요합니다.")
+            return {}
+        
+        params = {
+            "pIndex": 1,    # 페이지 위치 (필수)
+            "pSize": 1,     # 페이지 당 요청 숫자 (필수)
+            "BILL_NO": bill_no  # 의안번호 (필수)
+        }
+        
+        # 의안ID는 선택적 파라미터
+        if bill_id:
+            params["BILL_ID"] = bill_id
+        
+        try:
+            response_data = self._make_request(endpoint, params)
+            
+            # API 응답에서 의안 상세정보 추출
+            try:
+                # 로그로 응답 구조 확인 (디버깅용)
+                logger.info(f"API 응답 구조: {response_data.keys()}")
+                
+                # 응답 구조 확인하고 적절하게 처리
+                if "ALLBILL" in response_data and isinstance(response_data["ALLBILL"], dict) and "row" in response_data["ALLBILL"]:
+                    bills_data = response_data["ALLBILL"]["row"]
+                    # 첫 번째 결과만 반환 (상세정보이므로 단일 항목이어야 함)
+                    return bills_data[0] if bills_data else {}
+                elif "ALLBILL" in response_data and isinstance(response_data["ALLBILL"], list) and len(response_data["ALLBILL"]) > 0:
+                    # 리스트 형태로 반환된 경우 (인덱스 접근 방식 수정)
+                    for item in response_data["ALLBILL"]:
+                        if isinstance(item, dict) and "row" in item:
+                            return item["row"][0] if item["row"] else {}
+                    
+                    logger.error(f"응답에서 'row' 키를 찾을 수 없음: {response_data}")
+                    return {}
+                else:
+                    logger.error(f"API 응답 구조 예상과 다름: {response_data}")
+                    return {}
+            except (KeyError, IndexError, TypeError) as e:
+                logger.error(f"API 응답 파싱 오류: {e}, 응답: {response_data}")
+                return {}
+        except Exception as e:
+            logger.error(f"의안 상세정보 조회 중 오류: {str(e)}")
+            return {}
+
     def get_bill_vote_results(self, 
                              assembly_term: int = 22,
                              bill_id: Optional[str] = None) -> List[Dict]:

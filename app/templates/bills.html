@@ -10,6 +10,26 @@
     </div>
 </div>
 
+{% if error_message %}
+<div class="row mb-4">
+    <div class="col-12">
+        <div class="alert alert-danger">
+            {{ error_message }}
+        </div>
+    </div>
+</div>
+{% endif %}
+
+{% if info_message %}
+<div class="row mb-4">
+    <div class="col-12">
+        <div class="alert alert-info">
+            {{ info_message }}
+        </div>
+    </div>
+</div>
+{% endif %}
+
 <div class="row mb-4">
     <div class="col-12">
         <div class="card">
@@ -18,44 +38,54 @@
             </div>
             <div class="card-body">
                 <form action="/bills" method="get" class="row g-3">
-                    <div class="col-md-3">
-                        <label for="title" class="form-label">제목</label>
-                        <input type="text" class="form-control" id="title" name="title" placeholder="발의안 제목 검색">
+                    <div class="col-md-2">
+                        <label for="bill_no" class="form-label">의안번호</label>
+                        <input type="text" class="form-control" id="bill_no" name="bill_no" placeholder="의안번호 입력" value="{{ bill_no }}">
                     </div>
                     <div class="col-md-3">
-                        <label for="proposer" class="form-label">발의자</label>
-                        <input type="text" class="form-control" id="proposer" name="proposer" placeholder="발의자 이름">
+                        <label for="title" class="form-label">제목</label>
+                        <input type="text" class="form-control" id="title" name="title" placeholder="발의안 제목 검색" value="{{ title }}">
+                    </div>
+                    <div class="col-md-2">
+                        <label for="proposer" class="form-label">제안자구분</label>
+                        <select class="form-select" id="proposer" name="proposer">
+                            <option value="">전체</option>
+                            <option value="의원" {% if proposer == "의원" %}selected{% endif %}>의원</option>
+                            <option value="위원장" {% if proposer == "위원장" %}selected{% endif %}>위원장</option>
+                            <option value="정부" {% if proposer == "정부" %}selected{% endif %}>정부</option>
+                        </select>
                     </div>
                     <div class="col-md-2">
                         <label for="status" class="form-label">처리 상태</label>
                         <select class="form-select" id="status" name="status">
                             <option value="">전체</option>
-                            <option value="계류">계류</option>
-                            <option value="통과">통과</option>
-                            <option value="폐기">폐기</option>
-                            <option value="대안반영">대안반영</option>
+                            <option value="계류" {% if status == "계류" %}selected{% endif %}>계류</option>
+                            <option value="원안가결" {% if status == "원안가결" %}selected{% endif %}>원안가결</option>
+                            <option value="수정가결" {% if status == "수정가결" %}selected{% endif %}>수정가결</option>
+                            <option value="대안반영폐기" {% if status == "대안반영폐기" %}selected{% endif %}>대안반영폐기</option>
+                            <option value="폐기" {% if status == "폐기" %}selected{% endif %}>폐기</option>
                         </select>
                     </div>
                     <div class="col-md-2">
                         <label for="committee" class="form-label">소관 위원회</label>
                         <select class="form-select" id="committee" name="committee">
                             <option value="">전체</option>
-                            <option value="기획재정위원회">기획재정위원회</option>
-                            <option value="교육위원회">교육위원회</option>
-                            <option value="국방위원회">국방위원회</option>
-                            <option value="외교통일위원회">외교통일위원회</option>
-                            <option value="행정안전위원회">행정안전위원회</option>
-                            <option value="문화체육관광위원회">문화체육관광위원회</option>
-                            <option value="농림축산식품해양수산위원회">농림축산식품해양수산위원회</option>
-                            <option value="산업통상자원중소벤처기업위원회">산업통상자원중소벤처기업위원회</option>
-                            <option value="보건복지위원회">보건복지위원회</option>
-                            <option value="환경노동위원회">환경노동위원회</option>
-                            <option value="국토교통위원회">국토교통위원회</option>
-                            <option value="정보위원회">정보위원회</option>
-                            <option value="여성가족위원회">여성가족위원회</option>
+                            <option value="기획재정위원회" {% if committee == "기획재정위원회" %}selected{% endif %}>기획재정위원회</option>
+                            <option value="교육위원회" {% if committee == "교육위원회" %}selected{% endif %}>교육위원회</option>
+                            <option value="국방위원회" {% if committee == "국방위원회" %}selected{% endif %}>국방위원회</option>
+                            <option value="외교통일위원회" {% if committee == "외교통일위원회" %}selected{% endif %}>외교통일위원회</option>
+                            <option value="행정안전위원회" {% if committee == "행정안전위원회" %}selected{% endif %}>행정안전위원회</option>
+                            <option value="문화체육관광위원회" {% if committee == "문화체육관광위원회" %}selected{% endif %}>문화체육관광위원회</option>
+                            <option value="농림축산식품해양수산위원회" {% if committee == "농림축산식품해양수산위원회" %}selected{% endif %}>농림축산식품해양수산위원회</option>
+                            <option value="산업통상자원중소벤처기업위원회" {% if committee == "산업통상자원중소벤처기업위원회" %}selected{% endif %}>산업통상자원중소벤처기업위원회</option>
+                            <option value="보건복지위원회" {% if committee == "보건복지위원회" %}selected{% endif %}>보건복지위원회</option>
+                            <option value="환경노동위원회" {% if committee == "환경노동위원회" %}selected{% endif %}>환경노동위원회</option>
+                            <option value="국토교통위원회" {% if committee == "국토교통위원회" %}selected{% endif %}>국토교통위원회</option>
+                            <option value="정보위원회" {% if committee == "정보위원회" %}selected{% endif %}>정보위원회</option>
+                            <option value="여성가족위원회" {% if committee == "여성가족위원회" %}selected{% endif %}>여성가족위원회</option>
                         </select>
                     </div>
-                    <div class="col-md-2 d-flex align-items-end">
+                    <div class="col-md-1 d-flex align-items-end">
                         <button type="submit" class="btn btn-primary w-100">검색</button>
                     </div>
                 </form>
@@ -78,36 +108,39 @@
                     <table class="table table-hover">
                         <thead>
                             <tr>
-                                <th scope="col">번호</th>
+                                <th scope="col">의안번호</th>
                                 <th scope="col">제목</th>
-                                <th scope="col">대표발의</th>
+                                <th scope="col">제안자</th>
                                 <th scope="col">소관위원회</th>
-                                <th scope="col">발의일</th>
+                                <th scope="col">제안일</th>
                                 <th scope="col">상태</th>
                             </tr>
                         </thead>
                         <tbody>
-                            {% for i in range(20) %}
+                            {% for bill in bills %}
                             <tr>
-                                <td>{{ 2320 - i }}</td>
-                                <td><a href="/bills/{{ 2320 - i }}">국민건강보험법 일부개정법률안</a></td>
+                                <td>{{ bill.no }}</td>
+                                <td><a href="/bills/{{ bill.no }}">{{ bill.title }}</a></td>
+                                <td>{{ bill.proposer }}</td>
+                                <td>{{ bill.committee }}</td>
+                                <td>{{ bill.proposal_date }}</td>
                                 <td>
-                                    <a href="/members/{{ i+1 }}">김의원{{ i+1 }}</a>
-                                    <span class="badge bg-secondary">외 {{ 10 + i }}인</span>
-                                </td>
-                                <td>{{ ["보건복지위원회", "교육위원회", "국방위원회", "기획재정위원회", "국토교통위원회"][i%5] }}</td>
-                                <td>2024-03-{{ 15 - (i%15) }}</td>
-                                <td>
-                                    {% if i % 4 == 0 %}
+                                    {% if bill.status == "계류" %}
                                     <span class="badge bg-primary">계류</span>
-                                    {% elif i % 4 == 1 %}
-                                    <span class="badge bg-success">통과</span>
-                                    {% elif i % 4 == 2 %}
-                                    <span class="badge bg-danger">폐기</span>
+                                    {% elif "가결" in bill.status %}
+                                    <span class="badge bg-success">{{ bill.status }}</span>
+                                    {% elif "폐기" in bill.status %}
+                                    <span class="badge bg-danger">{{ bill.status }}</span>
+                                    {% elif "반영" in bill.status %}
+                                    <span class="badge bg-warning text-dark">{{ bill.status }}</span>
                                     {% else %}
-                                    <span class="badge bg-warning text-dark">대안반영</span>
+                                    <span class="badge bg-secondary">{{ bill.status }}</span>
                                     {% endif %}
                                 </td>
+                            </tr>
+                            {% else %}
+                            <tr>
+                                <td colspan="6" class="text-center">검색 결과가 없습니다.</td>
                             </tr>
                             {% endfor %}
                         </tbody>
@@ -117,16 +150,16 @@
                 <!-- 페이지네이션 -->
                 <nav aria-label="Page navigation">
                     <ul class="pagination justify-content-center mt-4">
-                        <li class="page-item disabled">
-                            <a class="page-link" href="#" tabindex="-1" aria-disabled="true">이전</a>
+                        <li class="page-item {% if not has_prev %}disabled{% endif %}">
+                            <a class="page-link" href="?bill_no={{ bill_no }}&title={{ title }}&proposer={{ proposer }}&status={{ status }}&committee={{ committee }}&page={{ page - 1 }}" tabindex="-1" {% if not has_prev %}aria-disabled="true"{% endif %}>이전</a>
                         </li>
-                        <li class="page-item active"><a class="page-link" href="#">1</a></li>
-                        <li class="page-item"><a class="page-link" href="#">2</a></li>
-                        <li class="page-item"><a class="page-link" href="#">3</a></li>
-                        <li class="page-item"><a class="page-link" href="#">4</a></li>
-                        <li class="page-item"><a class="page-link" href="#">5</a></li>
-                        <li class="page-item">
-                            <a class="page-link" href="#">다음</a>
+                        
+                        <li class="page-item active">
+                            <span class="page-link">{{ page }}</span>
+                        </li>
+                        
+                        <li class="page-item {% if not has_next %}disabled{% endif %}">
+                            <a class="page-link" href="?bill_no={{ bill_no }}&title={{ title }}&proposer={{ proposer }}&status={{ status }}&committee={{ committee }}&page={{ page + 1 }}" {% if not has_next %}aria-disabled="true"{% endif %}>다음</a>
                         </li>
                     </ul>
                 </nav>

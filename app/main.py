@@ -268,57 +268,197 @@ async def bills_page(
     proposer: Optional[str] = None,
     status: Optional[str] = None,
     committee: Optional[str] = None,
+    bill_no: Optional[str] = None,
     page: int = 1,
     limit: int = 20
 ):
-    # 발의안 데이터 조회 로직 (필터링 및 페이지네이션 적용)
-    query = db.query(BillModel)
-    if title:
-        query = query.filter(BillModel.title.contains(title))
-    if proposer:
-        query = query.filter(BillModel.proposer.contains(proposer))
-    if status:
-        query = query.filter(BillModel.status == status)
-    if committee:
-        query = query.filter(BillModel.committee == committee)
-    
-    # 페이지네이션
-    offset = (page - 1) * limit
-    total = query.count()
-    bills = query.offset(offset).limit(limit).all()
-    
-    return templates.TemplateResponse(
-        "bills.html", 
-        {
+    """발의안 목록 페이지"""
+    try:
+        # 의안번호 검색 시에만 API 호출
+        if bill_no:
+            # API에서 발의안 데이터 가져오기
+            bills_data = assembly_api.get_bills(
+                bill_name=title,
+                proposer=proposer,
+                committee=committee,
+                bill_no=bill_no,
+                page_index=page,
+                page_size=limit
+            )
+            
+            # 가져온 데이터를 처리하여 표시
+            bills = []
+            for bill_data in bills_data:
+                bill = {
+                    "id": bill_data.get("BILL_ID", ""),
+                    "no": bill_data.get("BILL_NO", ""),
+                    "title": bill_data.get("BILL_NM", ""),
+                    "proposer": bill_data.get("PPSR_NM", ""),
+                    "committee": bill_data.get("JRCMIT_NM", ""),
+                    "proposal_date": bill_data.get("PPSL_DT", ""),
+                    "status": bill_data.get("RGS_CONF_RSLT", "계류") if bill_data.get("RGS_CONF_RSLT") else "계류"
+                }
+                bills.append(bill)
+        else:
+            # 의안번호 없이 전체 조회는 불가능하므로 안내 메시지 표시
+            bills = []
+        
+        # 페이지네이션 정보 계산
+        has_next = len(bills) == limit
+        has_prev = page > 1
+        
+        # 화면에 표시할 데이터 구성
+        context = {
             "request": request,
             "bills": bills,
-            "total": total,
             "page": page,
             "limit": limit,
-            "pages": (total + limit - 1) // limit,
+            "has_next": has_next,
+            "has_prev": has_prev,
             "title": title or "",
             "proposer": proposer or "",
             "status": status or "",
-            "committee": committee or ""
+            "committee": committee or "",
+            "bill_no": bill_no or "",
+            "info_message": "의안번호를 입력하시면 해당 의안정보를 검색할 수 있습니다." if not bill_no else None
         }
-    )
+        
+        return templates.TemplateResponse("bills.html", context)
+    
+    except Exception as e:
+        logger.error(f"발의안 목록 조회 중 오류: {e}")
+        
+        # 오류 발생 시 빈 목록 반환
+        return templates.TemplateResponse(
+            "bills.html", 
+            {
+                "request": request,
+                "bills": [],
+                "page": page,
+                "limit": limit,
+                "has_next": False,
+                "has_prev": page > 1,
+                "title": title or "",
+                "proposer": proposer or "",
+                "status": status or "",
+                "committee": committee or "",
+                "bill_no": bill_no or "",
+                "error_message": f"발의안 데이터를 가져오는 중 오류가 발생했습니다: {str(e)}"
+            }
+        )
 
 # 발의안 상세 페이지 라우트 추가
-@app.get("/bills/{bill_id}", response_class=HTMLResponse)
+@app.get("/bills/{bill_no}", response_class=HTMLResponse)
 async def bill_detail_page(
     request: Request,
-    bill_id: int,
+    bill_no: str,
     db: Session = Depends(get_db)
 ):
-    # 특정 발의안 조회
-    bill = db.query(BillModel).filter(BillModel.id == bill_id).first()
-    if not bill:
-        raise HTTPException(status_code=404, detail="발의안을 찾을 수 없습니다")
+    """발의안 상세 페이지"""
+    try:
+        # API에서 발의안 상세 정보 가져오기
+        bill_data = assembly_api.get_bill_detail(bill_no=bill_no)
+        
+        # 발의안을 찾지 못한 경우 404 오류
+        if not bill_data:
+            raise HTTPException(status_code=404, detail="발의안을 찾을 수 없습니다")
+        
+        # 3. 발의안 정보 구성
+        bill = {
+            "id": bill_data.get("BILL_ID", ""),
+            "no": bill_data.get("BILL_NO", ""),
+            "title": bill_data.get("BILL_NM", ""),
+            "proposer": bill_data.get("PPSR_NM", ""),
+            "committee": bill_data.get("JRCMIT_NM", ""),
+            "proposal_date": bill_data.get("PPSL_DT", ""),
+            "status": bill_data.get("RGS_CONF_RSLT", "계류") if bill_data.get("RGS_CONF_RSLT") else "계류",
+            "link_url": bill_data.get("LINK_URL", ""),
+            
+            # 처리 경과 정보
+            "committee_refer_date": bill_data.get("JRCMIT_CMMT_DT", ""),  # 소관위 회부일
+            "committee_present_date": bill_data.get("JRCMIT_PRSNT_DT", ""),  # 소관위 상정일
+            "committee_proc_date": bill_data.get("JRCMIT_PROC_DT", ""),  # 소관위 처리일
+            "committee_proc_result": bill_data.get("JRCMIT_PROC_RSLT", ""),  # 소관위 처리결과
+            
+            "law_committee_refer_date": bill_data.get("LAW_CMMT_DT", ""),  # 법사위 회부일
+            "law_committee_present_date": bill_data.get("LAW_PRSNT_DT", ""),  # 법사위 상정일
+            "law_committee_proc_date": bill_data.get("LAW_PROC_DT", ""),  # 법사위 처리일
+            "law_committee_proc_result": bill_data.get("LAW_PROC_RSLT", ""),  # 법사위 처리결과
+            
+            "plenary_present_date": bill_data.get("RGS_PRSNT_DT", ""),  # 본회의 상정일
+            "plenary_resolve_date": bill_data.get("RGS_RSLN_DT", ""),  # 본회의 의결일
+            "plenary_result": bill_data.get("RGS_CONF_RSLT", "")  # 본회의 결과
+        }
+        
+        # 4. 처리 경과 정보 생성
+        process_history = []
+        
+        # 제안일
+        if bill["proposal_date"]:
+            process_history.append({
+                "date": bill["proposal_date"],
+                "content": "발의"
+            })
+        
+        # 소관위원회 회부일
+        if bill["committee_refer_date"]:
+            process_history.append({
+                "date": bill["committee_refer_date"],
+                "content": f"소관위원회({bill['committee']}) 회부"
+            })
+        
+        # 소관위원회 상정일
+        if bill["committee_present_date"]:
+            process_history.append({
+                "date": bill["committee_present_date"],
+                "content": f"소관위원회 상정"
+            })
+        
+        # 소관위원회 처리일
+        if bill["committee_proc_date"]:
+            process_history.append({
+                "date": bill["committee_proc_date"],
+                "content": f"소관위원회 의결: {bill['committee_proc_result']}"
+            })
+        
+        # 법사위 회부일
+        if bill["law_committee_refer_date"]:
+            process_history.append({
+                "date": bill["law_committee_refer_date"],
+                "content": "법제사법위원회 회부"
+            })
+        
+        # 본회의 의결일
+        if bill["plenary_resolve_date"]:
+            process_history.append({
+                "date": bill["plenary_resolve_date"],
+                "content": f"본회의 의결: {bill['plenary_result']}"
+            })
+        
+        # 처리 경과 정보 추가
+        bill["process_history"] = sorted(process_history, key=lambda x: x["date"])
+        
+        return templates.TemplateResponse("bill_detail.html", {"request": request, "bill": bill})
     
-    return templates.TemplateResponse(
-        "bill_detail.html", 
-        {"request": request, "bill": bill}
-    )
+    except HTTPException:
+        # 리소스를 찾을 수 없는 경우
+        raise
+    
+    except Exception as e:
+        logger.error(f"발의안 상세 정보 조회 중 오류: {e}")
+        
+        # 오류 발생 시 더미 데이터로 화면 보여주기
+        dummy_bill = {
+            "no": bill_no,
+            "title": "발의안 정보를 가져올 수 없습니다",
+            "proposer": "정보 없음",
+            "committee": "정보 없음",
+            "proposal_date": "정보 없음",
+            "status": "정보 없음",
+            "content": f"발의안 상세 정보를 가져오는 중 오류가 발생했습니다: {str(e)}"
+        }
+        
+        return templates.TemplateResponse("bill_detail.html", {"request": request, "bill": dummy_bill})
 
 # 활동 점수 업데이트 및 랭킹 생성 작업 스케줄러
 @app.on_event("startup")

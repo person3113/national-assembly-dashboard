@@ -15,3 +15,5 @@
 > 우리 사이트 API 문서: http://127.0.0.1:8000/docs
 > api test 경로: http://127.0.0.1:8000/admin/test-api
 > api 데이터 동기화: http://127.0.0.1:8000/admin/sync-data
+
+# 개발 과정
