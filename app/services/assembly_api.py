@@ -1,8 +1,11 @@
+import logging
 import requests
 from datetime import datetime
 from typing import Dict, List, Any, Optional
 
 from app.core.config import settings
+
+logger = logging.getLogger(__name__)
 
 class AssemblyAPI:
     def __init__(self):
@@ -16,20 +19,56 @@ class AssemblyAPI:
         # 응답 형식 JSON으로 설정
         params["Type"] = "json"
         
+        # API URL 형식 확인 (가이드 문서 참고)
         url = f"{self.base_url}/{endpoint}"
-        response = requests.get(url, params=params)
         
-        if response.status_code != 200:
-            raise Exception(f"API 요청 실패: {response.status_code}, {response.text}")
+        # 요청 전 로깅 (디버깅용)
+        logger.info(f"API 요청: {url}, 파라미터: {params}")
         
-        return response.json()
+        try:
+            response = requests.get(url, params=params, timeout=10)
+            
+            # 디버깅을 위한 응답 로깅
+            logger.info(f"API 응답 상태 코드: {response.status_code}")
+            
+            # HTTP 오류 확인
+            if response.status_code != 200:
+                logger.error(f"HTTP 오류: {response.status_code}, 응답: {response.text}")
+                raise Exception(f"API 요청 실패: {response.status_code}, {response.text}")
+            
+            # JSON 응답 확인
+            result = response.json()
+            
+            # 응답 디버깅 
+            if "RESULT" in result and result["RESULT"]["CODE"] != "INFO-000":
+                error_code = result["RESULT"]["CODE"]
+                error_msg = result["RESULT"]["MESSAGE"]
+                logger.error(f"API 오류 응답: {error_code}, {error_msg}")
+                raise Exception(f"API 오류: {error_code}, {error_msg}")
+                
+            return result
+            
+        except requests.exceptions.RequestException as e:
+            # 요청 관련 오류
+            logger.error(f"API 요청 중 오류: {str(e)}")
+            raise Exception(f"API 요청 오류: {str(e)}")
+            
+        except ValueError as e:
+            # JSON 파싱 오류
+            logger.error(f"API 응답 JSON 파싱 오류: {str(e)}")
+            raise Exception(f"API 응답 파싱 오류: {str(e)}")
+            
+        except Exception as e:
+            # 기타 오류
+            logger.error(f"API 요청 중 예상치 못한 오류: {str(e)}")
+            raise
     
     def get_members(self, 
-                   assembly_term: int = 22,  # 22대 국회 기본값
-                   name: Optional[str] = None,
-                   party: Optional[str] = None) -> List[Dict]:
+               assembly_term: int = 22,  # 22대 국회 기본값
+               name: Optional[str] = None,
+               party: Optional[str] = None) -> List[Dict]:
         """국회의원 인적사항 조회"""
-        endpoint = "nzmimeepazxkubdpn"  # 국회의원 인적사항 API 엔드포인트
+        endpoint = "nwvrqwxyaytdsfvhu"  # 국회의원 인적사항 API 엔드포인트
         
         params = {
             "ASSEMBLY": assembly_term,  # 대수
@@ -43,15 +82,24 @@ class AssemblyAPI:
         if party:
             params["POLY_NM"] = party  # 정당으로 검색
             
-        response_data = self._make_request(endpoint, params)
-        
-        # API 응답에서 국회의원 목록 추출
         try:
-            # API 응답 구조에 맞게 데이터 추출 (실제 API 응답 구조에 따라 수정 필요)
-            members_data = response_data["nzmimeepazxkubdpn"][1]["row"]
-            return members_data
-        except (KeyError, IndexError) as e:
-            print(f"API 응답 파싱 오류: {e}")
+            response_data = self._make_request(endpoint, params)
+            
+            # API 응답에서 국회의원 목록 추출
+            try:
+                # 실제 API 응답 구조 확인
+                if endpoint in response_data and len(response_data[endpoint]) > 1:
+                    members_data = response_data[endpoint][1]["row"]
+                    return members_data
+                else:
+                    # 응답 구조가 다른 경우 전체 응답 로깅
+                    logger.error(f"API 응답 구조 예상과 다름: {response_data}")
+                    return []
+            except (KeyError, IndexError) as e:
+                logger.error(f"API 응답 파싱 오류: {e}, 응답: {response_data}")
+                return []
+        except Exception as e:
+            logger.error(f"국회의원 정보 조회 중 오류: {str(e)}")
             return []
             
     def get_bill_vote_results(self, 

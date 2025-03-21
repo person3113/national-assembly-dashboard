@@ -1,8 +1,6 @@
-import logging  # Add this import
-
-# Logger 설정
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+import logging  
+import pprint
+import requests  # Add this import
 
 from fastapi import FastAPI, Request, Depends, HTTPException  # HTTPException 추가
 from fastapi.staticfiles import StaticFiles
@@ -11,14 +9,22 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse
 from sqlalchemy.orm import Session
 from typing import Optional
-from datetime import date
+from datetime import date, datetime
 
 from app.api import api_router
 from app.core.config import settings
 from app.db.session import engine, get_db
 from app.models import member  # 여기에 모든 모델 모듈 추가
 from app.models.member import Member as MemberModel
-from app.models.bill import Bill as BillModel  # Add this import
+from app.models.bill import Bill as BillModel  
+from app.services.assembly_api import assembly_api
+
+# 템플릿에서 사용할 필터 추가
+from jinja2 import pass_context
+
+@pass_context
+def pprint_filter(context, value):
+    return pprint.pformat(value)
 
 # 데이터베이스 테이블 생성
 member.Base.metadata.drop_all(bind=engine)  # 기존 테이블 삭제
@@ -44,6 +50,11 @@ app.mount("/static", StaticFiles(directory="app/static"), name="static")
 
 # 템플릿 설정
 templates = Jinja2Templates(directory="app/templates")
+templates.env.filters["pprint"] = pprint_filter
+
+# Logger 설정
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 # API 라우터 등록
 app.include_router(api_router, prefix=settings.API_V1_STR)
@@ -117,9 +128,21 @@ def insert_initial_data(db: Session):
 # 애플리케이션 시작 시 초기 데이터 삽입
 @app.on_event("startup")
 async def startup_event():
+    """애플리케이션 시작 시 기본 설정 및 초기 데이터 준비"""
+    # 데이터베이스에 레코드가 없는 경우만 초기 데이터 삽입
     db = next(get_db())
     try:
-        insert_initial_data(db)
+        members_count = db.query(MemberModel).count()
+        if members_count == 0:
+            # 데이터가 없는 경우 샘플 데이터 추가
+            insert_initial_data(db)
+            
+            # 로그 출력
+            logger.info("초기 샘플 데이터 삽입 완료")
+        else:
+            logger.info(f"기존 데이터 유지: {members_count}개의 국회의원 데이터가 존재합니다")
+    except Exception as e:
+        logger.error(f"초기화 중 오류 발생: {e}")
     finally:
         db.close()
 
@@ -138,7 +161,7 @@ async def members_page(
     page: int = 1,
     limit: int = 20
 ):
-    # 국회의원 데이터 조회 로직 (API와 유사)
+    # 국회의원 데이터 조회 로직
     query = db.query(MemberModel)
     if name:
         query = query.filter(MemberModel.name.contains(name))
@@ -147,10 +170,27 @@ async def members_page(
     if district:
         query = query.filter(MemberModel.district.contains(district))
     
-    # 페이지네이션
-    offset = (page - 1) * limit
+    # 총 레코드 수와 페이지 수 계산
     total = query.count()
+    total_pages = (total + limit - 1) // limit
+    
+    # 페이지 범위 검증
+    if page < 1:
+        page = 1
+    elif page > total_pages and total_pages > 0:
+        page = total_pages
+    
+    # 오프셋 계산 및 데이터 조회
+    offset = (page - 1) * limit
     members = query.offset(offset).limit(limit).all()
+    
+    # 페이지네이션 범위 설정 (현재 페이지 주변 5개 페이지 표시)
+    if total_pages <= 5:
+        page_range = range(1, total_pages + 1)
+    else:
+        start_page = max(1, page - 2)
+        end_page = min(total_pages, page + 2)
+        page_range = range(start_page, end_page + 1)
     
     return templates.TemplateResponse(
         "members.html", 
@@ -160,7 +200,8 @@ async def members_page(
             "total": total,
             "page": page,
             "limit": limit,
-            "pages": (total + limit - 1) // limit,
+            "total_pages": total_pages,
+            "page_range": page_range,
             "name": name or "",
             "party": party or "",
             "district": district or ""
@@ -299,6 +340,140 @@ async def update_activity_scores():
         logger.error(f"활동 점수 업데이트 중 오류 발생: {e}")
     finally:
         db.close()
+
+@app.get("/admin/sync-data", response_class=HTMLResponse)
+async def sync_data(request: Request, db: Session = Depends(get_db), assembly_term: int = 22):
+    """국회정보 API에서 데이터를 가져와 DB에 동기화하는 관리자 페이지"""
+    result = {"success": False, "message": "", "counts": {}, "debug_info": {}}
+    
+    try:
+        # API 키 확인
+        api_key = settings.ASSEMBLY_API_KEY
+        if not api_key or api_key == "":
+            result["message"] = "API 키가 설정되지 않았습니다. .env 파일을 확인하세요."
+            return templates.TemplateResponse(
+                "admin/sync_data.html", 
+                {"request": request, "result": result}
+            )
+        
+        # 디버깅을 위한 정보 수집
+        result["debug_info"]["api_key_exists"] = bool(api_key)
+        result["debug_info"]["api_base_url"] = settings.ASSEMBLY_API_BASE_URL
+        
+        # 1. 국회의원 정보 동기화
+        members_data = assembly_api.get_members(assembly_term=assembly_term)
+        
+        # 디버깅: API 응답 확인
+        result["debug_info"]["members_data_count"] = len(members_data)
+        
+        # 데이터가 없으면 오류 메시지 반환
+        if not members_data:
+            result["message"] = "API에서 국회의원 데이터를 가져오지 못했습니다. 로그를 확인하세요."
+            return templates.TemplateResponse(
+                "admin/sync_data.html", 
+                {"request": request, "result": result}
+            )
+        
+        # 이하 기존 코드와 동일...
+        member_count = 0
+        
+        for member_data in members_data:
+            # 이미 존재하는 의원인지 확인
+            existing_member = db.query(MemberModel).filter(
+                MemberModel.name == member_data.get("HG_NM", "")
+            ).first()
+            
+            if existing_member:
+                # 기존 데이터 업데이트
+                existing_member.party = member_data.get("POLY_NM", "")
+                existing_member.district = member_data.get("ORIG_NM", "")
+                existing_member.position = member_data.get("CURR_COMMITTEE", "")
+                existing_member.last_updated = datetime.now().date()
+            else:
+                # 새로운 의원 데이터 생성
+                new_member = MemberModel(
+                    name=member_data.get("HG_NM", ""),
+                    hanja_name=member_data.get("HJ_NM", ""),
+                    eng_name=member_data.get("ENG_NM", ""),
+                    party=member_data.get("POLY_NM", ""),
+                    district=member_data.get("ORIG_NM", ""),
+                    position=member_data.get("CURR_COMMITTEE", ""),
+                    num_bills=0,
+                    attendance_rate=0.0,
+                    speech_count=0,
+                    activity_score=0.0,
+                    is_active=True,
+                    last_updated=datetime.now().date()
+                )
+                db.add(new_member)
+                member_count += 1
+        
+        # 3. 활동 점수 계산
+        members = db.query(MemberModel).all()
+        for member in members:
+            member.activity_score = calculate_activity_score(member)
+        
+        db.commit()
+        result["success"] = True
+        result["message"] = "데이터 동기화 완료"
+        result["counts"] = {"members": member_count}
+        
+    except Exception as e:
+        db.rollback()
+        result["message"] = f"오류 발생: {str(e)}"
+        result["debug_info"]["error"] = str(e)
+        logger.error(f"API 데이터 동기화 중 오류: {e}")
+    
+    return templates.TemplateResponse(
+        "admin/sync_data.html", 
+        {"request": request, "result": result}
+    )
+
+@app.get("/admin/test-api", response_class=HTMLResponse)
+async def test_api(request: Request):
+    """API 연결 테스트 페이지"""
+    result = {"success": False, "message": "", "data": None}
+    
+    try:
+        # API 키 확인
+        api_key = settings.ASSEMBLY_API_KEY
+        if not api_key or api_key == "":
+            result["message"] = "API 키가 설정되지 않았습니다. .env 파일을 확인하세요."
+            return templates.TemplateResponse(
+                "admin/test_api.html", 
+                {"request": request, "result": result}
+            )
+        
+        # 간단한 API 호출 테스트
+        url = f"{settings.ASSEMBLY_API_BASE_URL}/nwvrqwxyaytdsfvhu"
+        params = {
+            "KEY": api_key,
+            "Type": "json",
+            "ASSEMBLY": 22,
+            "pIndex": 1,
+            "pSize": 1
+        }
+        
+        # 요청 보내기
+        response = requests.get(url, params=params)
+        
+        # 결과 확인
+        result["status_code"] = response.status_code
+        if response.status_code == 200:
+            result["data"] = response.json()
+            result["success"] = True
+            result["message"] = "API 호출 성공"
+        else:
+            result["message"] = f"API 호출 실패: {response.status_code}, {response.text}"
+        
+    except Exception as e:
+        result["message"] = f"오류 발생: {str(e)}"
+        logging.error(f"API 테스트 중 오류: {e}")
+    
+    return templates.TemplateResponse(
+        "admin/test_api.html", 
+        {"request": request, "result": result}
+    )
 
 if __name__ == "__main__":
     import uvicorn

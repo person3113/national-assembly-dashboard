@@ -20,41 +20,39 @@
                 <form action="/members" method="get" class="row g-3">
                     <div class="col-md-3">
                         <label for="name" class="form-label">의원명</label>
-                        <input type="text" class="form-control" id="name" name="name" placeholder="이름 검색">
+                        <input type="text" class="form-control" id="name" name="name" placeholder="이름 검색" value="{{ name }}">
                     </div>
                     <div class="col-md-3">
                         <label for="party" class="form-label">소속 정당</label>
                         <select class="form-select" id="party" name="party">
                             <option value="">전체</option>
-                            <option value="국민의힘">국민의힘</option>
-                            <option value="더불어민주당">더불어민주당</option>
-                            <option value="정의당">정의당</option>
-                            <option value="기본소득당">기본소득당</option>
-                            <option value="무소속">무소속</option>
+                            <option value="국민의힘" {% if party == "국민의힘" %}selected{% endif %}>국민의힘</option>
+                            <option value="더불어민주당" {% if party == "더불어민주당" %}selected{% endif %}>더불어민주당</option>
+                            <option value="정의당" {% if party == "정의당" %}selected{% endif %}>정의당</option>
+                            <option value="기본소득당" {% if party == "기본소득당" %}selected{% endif %}>기본소득당</option>
+                            <option value="무소속" {% if party == "무소속" %}selected{% endif %}>무소속</option>
                         </select>
                     </div>
                     <div class="col-md-3">
                         <label for="district" class="form-label">지역구</label>
                         <select class="form-select" id="district" name="district">
                             <option value="">전체</option>
-                            <option value="서울">서울</option>
-                            <option value="부산">부산</option>
-                            <option value="대구">대구</option>
-                            <option value="인천">인천</option>
-                            <option value="광주">광주</option>
-                            <option value="대전">대전</option>
-                            <option value="울산">울산</option>
-                            <option value="세종">세종</option>
-                            <option value="경기">경기</option>
-                            <option value="강원">강원</option>
-                            <option value="충북">충북</option>
-                            <option value="충남">충남</option>
-                            <option value="전북">전북</option>
-                            <option value="전남">전남</option>
-                            <option value="경북">경북</option>
-                            <option value="경남">경남</option>
-                            <option value="제주">제주</option>
-                            <option value="비례대표">비례대표</option>
+                            <option value="서울" {% if district == "서울" %}selected{% endif %}>서울</option>
+                            <option value="부산" {% if district == "부산" %}selected{% endif %}>부산</option>
+                            <option value="대구" {% if district == "대구" %}selected{% endif %}>대구</option>
+                            <option value="인천" {% if district == "인천" %}selected{% endif %}>인천</option>
+                            <option value="광주" {% if district == "광주" %}selected{% endif %}>광주</option>
+                            <option value="대전" {% if district == "대전" %}selected{% endif %}>대전</option>
+                            <option value="울산" {% if district == "울산" %}selected{% endif %}>울산</option>
+                            <option value="세종" {% if district == "세종" %}selected{% endif %}>세종</option>
+                            <option value="경기" {% if district == "경기" %}selected{% endif %}>경기</option>
+                            <option value="강원" {% if district == "강원" %}selected{% endif %}>강원</option>
+                            <option value="충북" {% if district == "충북" %}selected{% endif %}>충북</option>
+                            <option value="전북" {% if district == "전북" %}selected{% endif %}>전북</option>
+                            <option value="전남" {% if district == "전남" %}selected{% endif %}>전남</option>
+                            <option value="경북" {% if district == "경북" %}selected{% endif %}>경북</option>
+                            <option value="경남" {% if district == "경남" %}selected{% endif %}>경남</option>
+                            <option value="비례대표" {% if district == "비례대표" %}selected{% endif %}>비례대표</option>
                         </select>
                     </div>
                     <div class="col-md-3 d-flex align-items-end">
@@ -91,22 +89,30 @@
                             </tr>
                         </thead>
                         <tbody>
-                            {% for i in range(10) %}
+                            {% for member in members %}
                             <tr>
-                                <td><a href="/members/{{ i+1 }}">김의원{{ i+1 }}</a></td>
+                                <td><a href="/members/{{ member.id }}">{{ member.name }}</a></td>
                                 <td>
-                                    {% if i % 2 == 0 %}
-                                    <span class="badge bg-danger">국민의힘</span>
+                                    {% if member.party == "국민의힘" %}
+                                    <span class="badge bg-danger">{{ member.party }}</span>
+                                    {% elif member.party == "더불어민주당" %}
+                                    <span class="badge bg-primary">{{ member.party }}</span>
+                                    {% elif member.party == "정의당" %}
+                                    <span class="badge bg-warning text-dark">{{ member.party }}</span>
                                     {% else %}
-                                    <span class="badge bg-primary">더불어민주당</span>
+                                    <span class="badge bg-secondary">{{ member.party }}</span>
                                     {% endif %}
                                 </td>
-                                <td>서울 강남구</td>
-                                <td>기획재정위원회</td>
-                                <td>{{ 10 + i }}</td>
-                                <td>{{ 95 - i }}%</td>
-                                <td>{{ 50 + i*5 }}</td>
-                                <td>{{ 90 - i*2 }}</td>
+                                <td>{{ member.district }}</td>
+                                <td>{{ member.position }}</td>
+                                <td class="text-center">{{ member.num_bills }}</td>
+                                <td class="text-center">{{ member.attendance_rate }}%</td>
+                                <td class="text-center">{{ member.speech_count }}</td>
+                                <td class="text-center">{{ member.activity_score }}</td>
+                            </tr>
+                            {% else %}
+                            <tr>
+                                <td colspan="8" class="text-center">검색 결과가 없습니다.</td>
                             </tr>
                             {% endfor %}
                         </tbody>
@@ -116,14 +122,21 @@
                 <!-- 페이지네이션 -->
                 <nav aria-label="Page navigation">
                     <ul class="pagination justify-content-center mt-4">
-                        <li class="page-item disabled">
-                            <a class="page-link" href="#" tabindex="-1" aria-disabled="true">이전</a>
+                        <!-- 이전 페이지 버튼 -->
+                        <li class="page-item {% if page == 1 %}disabled{% endif %}">
+                            <a class="page-link" href="?name={{ name }}&party={{ party }}&district={{ district }}&page={{ page - 1 }}" tabindex="-1" {% if page == 1 %}aria-disabled="true"{% endif %}>이전</a>
                         </li>
-                        <li class="page-item active"><a class="page-link" href="#">1</a></li>
-                        <li class="page-item"><a class="page-link" href="#">2</a></li>
-                        <li class="page-item"><a class="page-link" href="#">3</a></li>
-                        <li class="page-item">
-                            <a class="page-link" href="#">다음</a>
+                        
+                        <!-- 페이지 번호 -->
+                        {% for p in page_range %}
+                        <li class="page-item {% if p == page %}active{% endif %}">
+                            <a class="page-link" href="?name={{ name }}&party={{ party }}&district={{ district }}&page={{ p }}">{{ p }}</a>
+                        </li>
+                        {% endfor %}
+                        
+                        <!-- 다음 페이지 버튼 -->
+                        <li class="page-item {% if page >= total_pages %}disabled{% endif %}">
+                            <a class="page-link" href="?name={{ name }}&party={{ party }}&district={{ district }}&page={{ page + 1 }}" {% if page >= total_pages %}aria-disabled="true"{% endif %}>다음</a>
                         </li>
                     </ul>
                 </nav>
