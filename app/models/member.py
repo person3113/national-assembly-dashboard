@@ -1,5 +1,4 @@
-from sqlalchemy import Column, Integer, String, Date, Float
-from sqlalchemy.sql.sqltypes import Boolean
+from sqlalchemy import Column, Integer, String, Date, Float, Boolean
 
 from app.db.session import Base
 
@@ -20,6 +19,7 @@ class Member(Base):
     attendance_rate = Column(Float, default=0.0) # 참석율 (%)
     speech_count = Column(Integer, default=0)    # 발언 횟수
     activity_score = Column(Float, default=0.0)  # 활동 점수 (자체 계산)
+    bill_pass_rate = Column(Float, default=0.0)  # 법안 통과율 (%)
     
     # 데이터 관리용 필드
     is_active = Column(Boolean, default=True)

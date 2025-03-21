@@ -1,19 +1,29 @@
-from fastapi import FastAPI, Request, Depends
+import logging  # Add this import
+
+# Logger 설정
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+from fastapi import FastAPI, Request, Depends, HTTPException  # HTTPException 추가
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import HTMLResponse  # 추가된 부분
-from sqlalchemy.orm import Session  # Add this import
-from typing import Optional  # Add this import
+from fastapi.responses import HTMLResponse
+from sqlalchemy.orm import Session
+from typing import Optional
+from datetime import date
 
 from app.api import api_router
 from app.core.config import settings
 from app.db.session import engine, get_db
 from app.models import member  # 여기에 모든 모델 모듈 추가
 from app.models.member import Member as MemberModel
+from app.models.bill import Bill as BillModel  # Add this import
 
 # 데이터베이스 테이블 생성
-member.Base.metadata.create_all(bind=engine)
+member.Base.metadata.drop_all(bind=engine)  # 기존 테이블 삭제
+member.Base.metadata.create_all(bind=engine)  # 새로운 테이블 생성
+BillModel.metadata.create_all(bind=engine)  # Add this line
 
 app = FastAPI(
     title=settings.PROJECT_NAME,
@@ -68,6 +78,50 @@ def calculate_activity_score(member: MemberModel) -> float:
     )
     
     return round(activity_score, 1)
+
+# 초기 데이터 삽입 함수
+def insert_initial_data(db: Session):
+    # 국회의원 데이터 추가
+    member1 = MemberModel(
+        name="김의원1",
+        hanja_name="金議員1",
+        eng_name="Kim Euiwon1",
+        birth_date=date(1970, 1, 1),
+        position="국회의원",
+        party="국민의힘",
+        district="서울 강남구",
+        num_bills=10,
+        attendance_rate=95.0,
+        speech_count=50,
+        activity_score=90.0,
+        bill_pass_rate=80.0,  
+        is_active=True,
+        last_updated=date.today()
+    )
+    db.add(member1)
+    
+    # 발의안 데이터 추가
+    bill1 = BillModel(
+        title="국민건강보험법 일부개정법률안",
+        proposer="김의원1",
+        status="계류",
+        committee="보건복지위원회",
+        proposal_date=date(2024, 3, 15),
+        content="국민건강보험법 일부를 개정하여 국민의 건강을 증진시키고자 함.",
+        proposer_id=1
+    )
+    db.add(bill1)
+    
+    db.commit()
+
+# 애플리케이션 시작 시 초기 데이터 삽입
+@app.on_event("startup")
+async def startup_event():
+    db = next(get_db())
+    try:
+        insert_initial_data(db)
+    finally:
+        db.close()
 
 # 템플릿 라우트 추가
 @app.get("/", response_class=HTMLResponse)
@@ -162,6 +216,67 @@ async def rankings_page(
             "category": category,
             "party": party
         }
+    )
+
+# 발의안 목록 페이지 라우트 추가
+@app.get("/bills", response_class=HTMLResponse)
+async def bills_page(
+    request: Request,
+    db: Session = Depends(get_db),
+    title: Optional[str] = None,
+    proposer: Optional[str] = None,
+    status: Optional[str] = None,
+    committee: Optional[str] = None,
+    page: int = 1,
+    limit: int = 20
+):
+    # 발의안 데이터 조회 로직 (필터링 및 페이지네이션 적용)
+    query = db.query(BillModel)
+    if title:
+        query = query.filter(BillModel.title.contains(title))
+    if proposer:
+        query = query.filter(BillModel.proposer.contains(proposer))
+    if status:
+        query = query.filter(BillModel.status == status)
+    if committee:
+        query = query.filter(BillModel.committee == committee)
+    
+    # 페이지네이션
+    offset = (page - 1) * limit
+    total = query.count()
+    bills = query.offset(offset).limit(limit).all()
+    
+    return templates.TemplateResponse(
+        "bills.html", 
+        {
+            "request": request,
+            "bills": bills,
+            "total": total,
+            "page": page,
+            "limit": limit,
+            "pages": (total + limit - 1) // limit,
+            "title": title or "",
+            "proposer": proposer or "",
+            "status": status or "",
+            "committee": committee or ""
+        }
+    )
+
+# 발의안 상세 페이지 라우트 추가
+@app.get("/bills/{bill_id}", response_class=HTMLResponse)
+async def bill_detail_page(
+    request: Request,
+    bill_id: int,
+    db: Session = Depends(get_db)
+):
+    # 특정 발의안 조회
+    bill = db.query(BillModel).filter(BillModel.id == bill_id).first()
+    if not bill:
+        raise HTTPException(status_code=404, detail="발의안을 찾을 수 없습니다")
+    
+    return templates.TemplateResponse(
+        "bill_detail.html", 
+        {"request": request, "bill": bill}
     )
 
 # 활동 점수 업데이트 및 랭킹 생성 작업 스케줄러
