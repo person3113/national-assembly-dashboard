@@ -407,11 +407,21 @@ async def sync_bills_data(db: Session, max_pages: int = 10, update_existing: boo
                         proposer=rep_proposer or bill_data.get("BILL_KIND_CD", "").endswith("(정부)") and "정부" or "",
                         co_proposers=", ".join(co_proposers) if co_proposers else None
                     )
+
+                    # 제안자명 정제
+                    if rep_proposer:
+                        clean_name = rep_proposer
+                        for suffix in ["의원", "위원장", "위원회"]:
+                            clean_name = clean_name.replace(suffix, "").strip()
+                        new_bill.proposer_clean = clean_name
                     
                     # 대표 발의자가 있으면 의원 테이블에서 조회하여 연결
                     if rep_proposer and "위원장" not in rep_proposer and rep_proposer != "정부":
+                        # 정제된 이름으로 조회
+                        clean_name = new_bill.proposer_clean if new_bill.proposer_clean else rep_proposer.replace("의원", "").strip()
+                        
                         proposer_member = db.query(MemberModel).filter(
-                            MemberModel.name == rep_proposer
+                            MemberModel.name == clean_name
                         ).first()
                         
                         if proposer_member:
@@ -766,7 +776,16 @@ async def member_detail_page(
     try:
         # 국회의원이 대표발의한 법안 목록 조회 (최근 5개)
         bills = db.query(BillModel)\
-            .filter(BillModel.rep_proposer == member.name)\
+            .filter(
+                # 1) 대표발의자 이름이 의원 이름과 일치하거나
+                (BillModel.rep_proposer == member.name) |
+                # 2) 대표발의자 이름이 "의원"이 붙은 형태와 일치하거나
+                (BillModel.rep_proposer == member.name + "의원") |
+                # 3) 제안자 이름이 의원 이름과 일치하거나
+                (BillModel.proposer == member.name) |
+                # 4) 제안자 이름이 "의원"이 붙은 형태와 일치
+                (BillModel.proposer == member.name + "의원")
+            )\
             .order_by(BillModel.proposal_date.desc())\
             .limit(5).all()
             
@@ -778,27 +797,6 @@ async def member_detail_page(
                 pass
             except Exception as e:
                 logger.error(f"의원 발의안 API 조회 중 오류: {e}")
-        
-        # 국회의원 발언 목록 가져오기 (API 호출) - 기존 코드 유지
-        speech_data = []
-        try:
-            speech_records = assembly_api.get_speech_records(member_name=member.name)
-            speech_data = speech_records[:5] if len(speech_records) > 0 else []
-            logger.info(f"{member.name} 의원의 발언 데이터 {len(speech_data)}개 조회 성공")
-        except Exception as e:
-            logger.error(f"발언 데이터 조회 중 오류: {e}")
-            speech_data = []
-        
-        # 발언 데이터 포맷팅
-        speeches = []
-        for speech in speech_data:
-            speeches.append({
-                "meeting_type": speech.get("TITLE", "본회의"),
-                "date": speech.get("TAKING_DATE", ""),
-                "content": speech.get("CONTENT", "발언 내용이 제공되지 않습니다.")[:100] + "...",
-                "topic": speech.get("TOPIC", "일반 발언"),
-                "link": speech.get("LINK_URL", "#")
-            })
         
         # 활동 지표 계산 (기존 코드 유지)
         activity_data = {
@@ -824,7 +822,6 @@ async def member_detail_page(
                 "request": request, 
                 "member": member,
                 "bills": bills,
-                "speeches": speeches,
                 "activity_data": activity_data
             }
         )
@@ -1014,21 +1011,33 @@ async def bill_detail_page(
                 bill.content = bill_data.get("DETAIL_CONTENT")
                 db.commit()
                 logger.info(f"의안 '{bill_no}' 상세 내용 DB 업데이트 완료")
-            
+
             # API 응답으로 상세 정보 구성
             bill_id = bill_data.get("BILL_ID", "")
-            
+
             # 제안자 정보 조회
             proposers_info = {}
             if bill_id:
                 proposers_info = assembly_api.get_bill_proposers(bill_id)
-            
+
+            # API 응답 구조 로깅
+            logger.info(f"발의안 API 응답 필드: {list(bill_data.keys())}")
+
+            # 발의자 정보를 다양한 필드에서 찾기
+            proposer_info = ""
+            possible_fields = ["PPSR_CN", "PPSR_NM", "PROPOSER", "PRESENTER", "BILL_PRESENTER"]
+            for field in possible_fields:
+                if field in bill_data and bill_data[field]:
+                    proposer_info = bill_data[field]
+                    logger.info(f"발의자 정보 필드 '{field}' 사용: {proposer_info}")
+                    break
+
             # 응답 구성
             bill = {
                 "id": bill_id,
                 "bill_no": bill_no,
                 "title": bill_data.get("BILL_NM", ""),
-                "proposer": bill_data.get("PPSR_NM", ""),
+                "proposer": proposer_info,  # 위에서 찾은 발의자 정보
                 "committee": bill_data.get("JRCMIT_NM", ""),
                 "proposal_date": bill_data.get("PPSL_DT", ""),
                 "status": bill_data.get("RGS_CONF_RSLT", "계류"),
@@ -1044,12 +1053,24 @@ async def bill_detail_page(
             # DB에서 조회한 경우 co_proposers가 문자열이므로 리스트로 변환
             co_proposers = bill.co_proposers.split(", ") if bill.co_proposers else []
             
+            # 발의자 정보 구성
+            proposer_info = ""
+            if bill.co_proposers:
+                # co_proposers가 있으면 "대표발의자 등 X인" 형식으로 생성
+                if bill.rep_proposer:
+                    proposer_count = len(co_proposers) + 1  # 대표발의자 포함
+                    proposer_info = f"{bill.rep_proposer}의원 등 {proposer_count}인"
+                else:
+                    proposer_info = bill.proposer or "정보 없음"
+            else:
+                proposer_info = bill.proposer or "정보 없음"
+            
             # 필요한 추가 정보 구성
             bill = {
                 "id": bill.bill_id,
                 "bill_no": bill.bill_no,
                 "title": bill.title,
-                "proposer": bill.proposer,
+                "proposer": proposer_info,  # 발의자 정보 설정
                 "committee": bill.committee,
                 "proposal_date": bill.proposal_date,
                 "status": bill.status,

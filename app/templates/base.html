@@ -15,6 +15,27 @@
         .white-space-pre-wrap {
             white-space: pre-wrap;
         }
+
+         /* 푸터 고정을 위한 스타일 추가 */
+         html, body {
+            height: 100%;
+            margin: 0;
+        }
+        
+        body {
+            display: flex;
+            flex-direction: column;
+            min-height: 100vh;
+        }
+        
+        main {
+            flex: 1 0 auto;
+        }
+        
+        footer {
+            flex-shrink: 0;
+            margin-top: auto;
+        }
     </style>
 
     {% block extra_css %}{% endblock %}
@@ -55,8 +76,8 @@
         {% block content %}{% endblock %}
     </main>
 
-    <!-- 푸터 -->
-    <footer class="bg-dark text-white mt-5 py-3">
+    <!-- 푸터 - margin-top 제거 (margin-top: auto로 대체됨) -->
+    <footer class="bg-dark text-white py-3">
         <div class="container text-center">
             <p>&copy; 2024 국회정보 대시보드 | 데이터 출처: 대한민국 국회 공공데이터</p>
         </div>

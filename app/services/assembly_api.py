@@ -419,11 +419,18 @@ class AssemblyAPI:
         # 기본 반환값 설정
         result = {
             "rep_proposer": None,
+            "proposer_info": None,  # 제안자 정보 (예: "홍길동의원 등 10인") 필드 추가
             "co_proposers": []
         }
         
         # 의안 기본 정보에서 제안자 추출 시도
         if bill_data:
+            # 가능한 제안자 정보 필드들을 검사
+            for field in ["PPSR_CN", "PPSR_NM", "PROPOSER", "PRESENTER"]:
+                if field in bill_data and bill_data[field]:
+                    result["proposer_info"] = bill_data[field]
+                    break
+            
             # 의안명에서 발의자 추출 시도 (예: "xxx법률안(홍길동의원 대표발의)")
             bill_name = bill_data.get("BILL_NAME", "")
             if "의원 대표발의" in bill_name:

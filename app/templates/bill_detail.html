@@ -74,13 +74,9 @@
                     <span>{{ bill.committee }}</span>
                 </li>
                 <li class="list-group-item d-flex justify-content-between">
-                    <span>대표발의</span>
+                    <span>제안자</span>
                     <span>
-                        {% if bill.rep_proposer %}
-                        <a href="/members/search?name={{ bill.rep_proposer }}">{{ bill.rep_proposer }}</a>
-                        {% else %}
-                        {{ bill.proposer }}
-                        {% endif %}
+                        {{ bill.proposer if bill.proposer else "정보 없음" }}
                     </span>
                 </li>
                 <li class="list-group-item d-flex justify-content-between">

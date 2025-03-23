@@ -27,6 +27,7 @@ class Bill(Base):
     # 관계 설정 (발의자와의 관계)
     proposer_id = Column(Integer, ForeignKey("members.id"), nullable=True)
     proposer_member = relationship("Member", back_populates="bills")
+    proposer_clean = Column(String, index=True, nullable=True) # 정제된 제안자명 필드 추가
 
 # Member 모델에 bills 관계 추가 - 순환 참조 방지를 위해 별도 import
 from app.models.member import Member
