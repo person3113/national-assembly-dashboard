@@ -24,7 +24,7 @@
             <div class="card-body">
                 <div class="mb-4">
                     <h5>제안이유 및 주요내용</h5>
-                    <p>{{ bill.content }}</p>
+                    <p class="white-space-pre-wrap">{{ bill.content }}</p>
                 </div>
                 
                 {% if bill.process_history %}
@@ -50,25 +50,12 @@
                     </div>
                 </div>
                 {% endif %}
-                
-                {% if bill.related_documents %}
-                <div>
-                    <h5>관련 문서</h5>
-                    <div class="list-group">
-                        {% for doc in bill.related_documents %}
-                        <a href="{{ doc.url }}" class="list-group-item list-group-item-action d-flex justify-content-between align-items-center" target="_blank">
-                            {{ doc.title }}
-                            <span><i class="bi bi-file-pdf"></i></span>
-                        </a>
-                        {% endfor %}
-                    </div>
-                </div>
-                {% endif %}
             </div>
         </div>
     </div>
     
     <div class="col-md-4">
+        <!-- 기본 정보 카드 수정 -->
         <div class="card mb-4">
             <div class="card-header">
                 <h5 class="mb-0">기본 정보</h5>
@@ -76,7 +63,7 @@
             <ul class="list-group list-group-flush">
                 <li class="list-group-item d-flex justify-content-between">
                     <span>의안번호</span>
-                    <span>{{ bill.id }}</span>
+                    <span>{{ bill.bill_no }}</span>
                 </li>
                 <li class="list-group-item d-flex justify-content-between">
                     <span>제안일</span>
@@ -88,7 +75,13 @@
                 </li>
                 <li class="list-group-item d-flex justify-content-between">
                     <span>대표발의</span>
-                    <span>{{ bill.proposer }}</span>
+                    <span>
+                        {% if bill.rep_proposer %}
+                        <a href="/members/search?name={{ bill.rep_proposer }}">{{ bill.rep_proposer }}</a>
+                        {% else %}
+                        {{ bill.proposer }}
+                        {% endif %}
+                    </span>
                 </li>
                 <li class="list-group-item d-flex justify-content-between">
                     <span>처리상태</span>
@@ -108,6 +101,22 @@
                 </li>
             </ul>
         </div>
+
+        <!-- 공동발의자 카드 추가 -->
+        {% if bill.co_proposers and bill.co_proposers|length > 0 %}
+        <div class="card mb-4">
+            <div class="card-header">
+                <h5 class="mb-0">공동발의 의원</h5>
+            </div>
+            <div class="card-body">
+                <div class="d-flex flex-wrap gap-1">
+                    {% for proposer in bill.co_proposers %}
+                    <a href="/members/search?name={{ proposer }}" class="badge bg-light text-dark p-2">{{ proposer }}</a>
+                    {% endfor %}
+                </div>
+            </div>
+        </div>
+        {% endif %}
         
         {% if bill.related_laws %}
         <div class="card mb-4">

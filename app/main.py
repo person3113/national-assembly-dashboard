@@ -21,6 +21,10 @@ from app.models.member import Member as MemberModel
 from app.models.bill import Bill as BillModel  
 from app.services.assembly_api import assembly_api
 
+# APScheduler 패키지 설치 필요: pip install apscheduler
+from apscheduler.schedulers.asyncio import AsyncIOScheduler
+from apscheduler.triggers.cron import CronTrigger
+
 # 템플릿에서 사용할 필터 추가
 from jinja2 import pass_context
 
@@ -28,15 +32,74 @@ from jinja2 import pass_context
 def pprint_filter(context, value):
     return pprint.pformat(value)
 
-# 데이터베이스 테이블 생성
-member.Base.metadata.drop_all(bind=engine)  # 기존 테이블 삭제
-member.Base.metadata.create_all(bind=engine)  # 새로운 테이블 생성
-BillModel.metadata.create_all(bind=engine)  # Add this line
+# 전역 변수로 동기화 상태 추적
+bills_sync_in_progress = False
+bills_sync_completed = False
+
+# 스케줄러 생성
+scheduler = AsyncIOScheduler()
+
+
+# 데이터베이스 테이블 생성 - 테이블이 없을 때만 생성
+# member.Base.metadata.drop_all(bind=engine)  # 이 줄을 제거하거나 주석 처리
+member.Base.metadata.create_all(bind=engine)  # 테이블이 없으면 생성
+BillModel.metadata.create_all(bind=engine)  # 테이블이 없으면 생성
 
 app = FastAPI(
     title=settings.PROJECT_NAME,
     openapi_url=f"{settings.API_V1_STR}/openapi.json"
 )
+
+# 스케줄러 작업: 매일 새벽 2시에 의안 데이터 동기화
+@app.on_event("startup")
+def setup_scheduler():
+    """애플리케이션 시작 시 스케줄러 설정"""
+    # 매일 새벽 2시에 의안 데이터 업데이트
+    scheduler.add_job(
+        scheduled_sync_bills,
+        CronTrigger(hour=2, minute=0),
+        id="daily_bills_sync"
+    )
+    
+    # 매주 일요일 새벽 3시에 의안 데이터 전체 업데이트 (기존 데이터도 업데이트)
+    scheduler.add_job(
+        scheduled_full_sync_bills,
+        CronTrigger(day_of_week="sun", hour=3, minute=0),
+        id="weekly_full_bills_sync"
+    )
+    
+    # 스케줄러 시작
+    scheduler.start()
+
+async def scheduled_sync_bills():
+    """스케줄러에서 실행되는 의안 데이터 동기화 함수"""
+    logger.info("스케줄러: 일일 의안 데이터 동기화 시작")
+    
+    db = next(get_db())
+    try:
+        # 증분 업데이트 방식으로 최신 의안만 추가
+        await sync_bills_data(db, max_pages=5, update_existing=True, incremental=True)
+    except Exception as e:
+        logger.error(f"스케줄러 의안 동기화 중 오류: {e}")
+    finally:
+        db.close()
+
+async def scheduled_full_sync_bills():
+    """스케줄러에서 실행되는 의안 데이터 전체 동기화 함수"""
+    logger.info("스케줄러: 주간 의안 데이터 전체 동기화 시작")
+    
+    db = next(get_db())
+    try:
+        # 1. 최근 데이터 업데이트 (기존 데이터도 업데이트)
+        await sync_bills_data(db, max_pages=10, update_existing=True, incremental=True)
+        
+        # 2. 누락된 데이터 검사 및 보완 (선택적)
+        # 이 부분은 필요할 경우 구현
+        
+    except Exception as e:
+        logger.error(f"스케줄러 전체 의안 동기화 중 오류: {e}")
+    finally:
+        db.close()
 
 # CORS 미들웨어 설정
 app.add_middleware(
@@ -216,12 +279,260 @@ async def sync_member_bills(db: Session):
         db.rollback()
         logger.error(f"발의안 정보 동기화 중 오류 발생: {e}")
 
+async def sync_bills_data(db: Session, max_pages: int = 10, update_existing: bool = False, incremental: bool = True, fetch_content: bool = True):
+    """
+    의안 데이터를 API에서 가져와 DB에 동기화하는 비동기 함수
+    
+    Args:
+        db: 데이터베이스 세션
+        max_pages: 처리할 최대 페이지 수
+        update_existing: 기존 의안 정보도 업데이트할지 여부
+        incremental: 증분 업데이트 여부 (최근 의안만 가져올지)
+        fetch_content: 의안 상세 내용을 가져올지 여부
+    """
+    try:
+        logger.info(f"의안 정보 동기화 시작... (최대 {max_pages} 페이지)")
+        
+        # 증분 업데이트 시 가장 최근에 추가된 의안의 발의일 확인
+        latest_date = None
+        if incremental:
+            latest_bill = db.query(BillModel).order_by(BillModel.proposal_date.desc()).first()
+            if latest_bill and latest_bill.proposal_date:
+                latest_date = latest_bill.proposal_date
+                logger.info(f"증분 업데이트: {latest_date} 이후 의안만 가져옵니다.")
+        
+        current_page = 1
+        page_size = 100
+        total_bills = 0
+        updated_bills = 0
+        skipped_bills = 0
+        
+        while current_page <= max_pages:
+            logger.info(f"의안 목록 페이지 {current_page} 조회 중...")
+            
+            # API에서 의안 목록 가져오기
+            bills_data = assembly_api.get_bill_ids_by_age(
+                assembly_term=22,
+                page_index=current_page,
+                page_size=page_size
+            )
+            
+            if not bills_data:
+                logger.info(f"더 이상 의안 데이터가 없거나 페이지 {current_page}에서 데이터를 가져오지 못했습니다.")
+                break
+                
+            # 각 의안 정보 DB에 저장
+            page_new_bills = 0
+            for i, bill_data in enumerate(bills_data):
+                try:
+                    # 의안번호와 의안ID 추출
+                    bill_id = bill_data.get("BILL_ID", "")
+                    bill_no = bill_data.get("BILL_NO", "")
+                    
+                    if not bill_id or not bill_no:
+                        logger.warning(f"의안ID 또는 의안번호가 없는 데이터 건너뜀")
+                        continue
+                    
+                    # 날짜 변환
+                    proc_date = None
+                    if bill_data.get("PROC_DT"):
+                        try:
+                            proc_date = datetime.strptime(bill_data.get("PROC_DT"), "%Y-%m-%d").date()
+                        except ValueError:
+                            proc_date = None
+                    
+                    # 증분 업데이트 시 최신 날짜보다 오래된 의안은 건너뜀
+                    if incremental and latest_date and proc_date and proc_date <= latest_date:
+                        skipped_bills += 1
+                        continue
+                        
+                    # 이미 저장된 의안인지 확인
+                    existing_bill = db.query(BillModel).filter(BillModel.bill_id == bill_id).first()
+                    
+                    # 기존 데이터가 있는 경우 처리
+                    if existing_bill:
+                        # 업데이트 옵션이 켜져 있으면 기존 데이터 업데이트
+                        if update_existing:
+                            existing_bill.status = bill_data.get("PROC_RESULT_CD", existing_bill.status)
+                            existing_bill.vote_result = bill_data.get("PROC_RESULT_CD")
+                            existing_bill.last_updated = datetime.now()
+                            
+                            # 표결 정보 업데이트
+                            if bill_data.get("PROC_DT"):
+                                try:
+                                    existing_bill.vote_date = proc_date
+                                except ValueError:
+                                    pass
+                                    
+                            updated_bills += 1
+                        else:
+                            skipped_bills += 1
+                        continue
+                    
+                    # 제안자 정보 조회 및 설정 (bill_data 자체도 함께 전달)
+                    proposers_info = assembly_api.get_bill_proposers(bill_id, bill_data)
+                    rep_proposer = proposers_info.get("rep_proposer")
+                    co_proposers = proposers_info.get("co_proposers", [])
+                    
+                    # 의안명에서 발의자 정보 추출 시도 (이미 get_bill_proposers에서 시도했지만 실패한 경우 여기서 재시도)
+                    if not rep_proposer:
+                        bill_name = bill_data.get("BILL_NAME", "")
+                        try:
+                            if ")" in bill_name and "(" in bill_name:
+                                parts = bill_name.split("(")
+                                if len(parts) > 1:
+                                    proposer_part = parts[-1].split(")")[0]
+                                    if "의원" in proposer_part:
+                                        rep_proposer = proposer_part.split("의원")[0] + "의원"
+                                    elif "위원장" in proposer_part:
+                                        rep_proposer = proposer_part
+                                    elif "정부" in proposer_part:
+                                        rep_proposer = "정부"
+                        except:
+                            pass
+                    
+                    # 새 의안 데이터 생성
+                    new_bill = BillModel(
+                        bill_id=bill_id,
+                        bill_no=bill_no,
+                        title=bill_data.get("BILL_NAME", ""),
+                        committee=bill_data.get("CURR_COMMITTEE", ""),
+                        status=bill_data.get("PROC_RESULT_CD", "계류"),
+                        proposal_date=proc_date,
+                        content="",  # 상세 내용은 별도 API 호출 필요
+                        bill_kind=bill_data.get("BILL_KIND_CD", ""),
+                        vote_result=bill_data.get("PROC_RESULT_CD"),
+                        vote_date=proc_date,
+                        rep_proposer=rep_proposer,
+                        proposer=rep_proposer or bill_data.get("BILL_KIND_CD", "").endswith("(정부)") and "정부" or "",
+                        co_proposers=", ".join(co_proposers) if co_proposers else None
+                    )
+                    
+                    # 대표 발의자가 있으면 의원 테이블에서 조회하여 연결
+                    if rep_proposer and "위원장" not in rep_proposer and rep_proposer != "정부":
+                        proposer_member = db.query(MemberModel).filter(
+                            MemberModel.name == rep_proposer
+                        ).first()
+                        
+                        if proposer_member:
+                            new_bill.proposer_id = proposer_member.id
+                            
+                            # 의원의 발의안 수 증가
+                            proposer_member.num_bills += 1
+                    
+                    db.add(new_bill)
+                    total_bills += 1
+                    page_new_bills += 1
+                    
+                    # 20건마다 커밋
+                    if total_bills > 0 and total_bills % 20 == 0:
+                        db.commit()
+                        logger.info(f"현재까지 {total_bills}개 신규 의안, {updated_bills}개 업데이트, {skipped_bills}개 건너뜀")
+                    
+                    # API 과부하 방지를 위한 대기 - 제안자 정보 API 실패 횟수가 임계값에 도달하면 대기 시간 단축
+                    if assembly_api.proposer_api_fail_count >= assembly_api.max_proposer_api_fails:
+                        # 연속 실패가 많으면 대기 시간 단축
+                        if i > 0 and i % 10 == 0:
+                            await asyncio.sleep(0.2)
+                    else:
+                        # 일반적인 대기 시간
+                        if i > 0 and i % 5 == 0:
+                            await asyncio.sleep(0.5)
+                    
+                except Exception as e:
+                    logger.error(f"의안 ID {bill_id} 처리 중 오류: {e}")
+                    continue
+            
+            # 커밋
+            db.commit()
+            logger.info(f"페이지 {current_page} 처리 완료. 페이지 내 신규 의안: {page_new_bills}개, 전체: {total_bills}개 신규, {updated_bills}개 업데이트, {skipped_bills}개 건너뜀")
+            
+            # 증분 업데이트 시 한 페이지에서 새 의안이 없으면 더 이상 진행할 필요 없음
+            if incremental and page_new_bills == 0:
+                logger.info("증분 업데이트: 이 페이지에서 새 의안이 없으므로 동기화를 종료합니다.")
+                break
+            
+            # 다음 페이지로
+            current_page += 1
+            
+            # API 과부하 방지
+            await asyncio.sleep(1)
+        
+        logger.info(f"의안 정보 동기화 완료. 총 {total_bills}개 신규 의안, {updated_bills}개 업데이트, {skipped_bills}개 건너뜀")
+        return total_bills
+        
+    except Exception as e:
+        db.rollback()
+        logger.error(f"의안 정보 동기화 중 오류 발생: {e}")
+        return 0
+
+# 이 함수를 startup_event 앞에 추가합니다
+def clean_duplicate_data():
+    """중복된 국회의원 데이터를 제거합니다"""
+    db = next(get_db())
+    try:
+        # 현재 데이터 수 확인
+        total_count = db.query(MemberModel).count()
+        logger.info(f"정리 전 국회의원 데이터: {total_count}명")
+        
+        # 중복 데이터를 확인하기 위한 집합
+        unique_names = set()
+        duplicate_ids = []
+        
+        # 모든 국회의원 데이터 조회
+        members = db.query(MemberModel).all()
+        for member in members:
+            if member.name in unique_names:
+                # 이미 처리한 이름이면 중복으로 판단
+                duplicate_ids.append(member.id)
+            else:
+                unique_names.add(member.name)
+        
+        # 중복 데이터 삭제
+        if duplicate_ids:
+            for dup_id in duplicate_ids:
+                db.query(MemberModel).filter(MemberModel.id == dup_id).delete()
+            db.commit()
+            
+        # 정리 후 데이터 수 확인
+        final_count = db.query(MemberModel).count()
+        logger.info(f"정리 후 국회의원 데이터: {final_count}명")
+        logger.info(f"총 {total_count - final_count}개의 중복 데이터가 제거되었습니다.")
+        
+    except Exception as e:
+        db.rollback()
+        logger.error(f"중복 데이터 정리 중 오류 발생: {e}")
+    finally:
+        db.close()
+
+# startup_event 함수 위에 이 함수 호출 코드를 추가합니다
+@app.on_event("startup")
+def startup_clean():
+    """애플리케이션 시작 시 중복 데이터 정리"""
+    clean_duplicate_data()
+
 # 애플리케이션 시작 시 초기 데이터 삽입
 @app.on_event("startup")
 def startup_event():
-    """애플리케이션 시작 시 국회의원 데이터를 API에서 불러와 초기 데이터 준비"""
+    """애플리케이션 시작 시 국회의원 데이터를 확인하고 필요한 경우에만 API에서 불러옴"""
     db = next(get_db())
     try:
+        # 기존 데이터 확인
+        existing_count = db.query(MemberModel).count()
+        
+        # 이미 적절한 수의 데이터가 있으면 API 호출 건너뛰기
+        # 실제 국회의원 수에 맞게 숫자 조정 (여기서는 300명으로 가정)
+        if 280 <= existing_count <= 320:  # 약간의 여유를 두고 확인
+            logger.info(f"이미 {existing_count}명의 국회의원 데이터가 DB에 존재합니다. API 호출을 건너뜁니다.")
+            return
+            
+        # 데이터 동기화가 필요한 경우, 기존 데이터를 모두 삭제하고 새로 추가
+        if existing_count > 0:
+            logger.info(f"기존 {existing_count}명의 국회의원 데이터를 삭제하고 새로 불러옵니다.")
+            db.query(MemberModel).delete()
+            db.commit()
+            
+        # 데이터가 없는 경우에만 API 호출
         # API 키 확인
         api_key = settings.ASSEMBLY_API_KEY
         if not api_key or api_key == "":
@@ -243,12 +554,6 @@ def startup_event():
             if members_count == 0:
                 insert_initial_data(db)
             return
-        
-        # 기존 데이터 확인 - 이미 데이터가 있으면 삭제 후 새로 추가
-        existing_count = db.query(MemberModel).count()
-        if existing_count > 0:
-            logger.info(f"기존 {existing_count}개의 국회의원 데이터를 삭제합니다.")
-            db.query(MemberModel).delete()
         
         # API 데이터 추가
         member_count = 0
@@ -319,7 +624,7 @@ def startup_event():
             db.commit()
             
             # 발의안 정보 동기화 (비동기 함수를 일반 함수로 호출)
-            sync_member_bills(db)
+            asyncio.run(sync_member_bills(db))
         except Exception as e:
             logger.error(f"활동 점수 계산 및 발의안 동기화 중 오류: {e}")
         
@@ -336,6 +641,52 @@ def startup_event():
                 logger.error(f"샘플 데이터 삽입 중 오류: {e2}")
     finally:
         db.close()
+
+@app.on_event("startup")
+async def sync_bills_on_startup():
+    """애플리케이션 시작 시 의안 데이터 동기화"""
+    global bills_sync_in_progress, bills_sync_completed
+    
+    # 이미 동기화가 진행 중이거나 완료된 경우 스킵
+    if bills_sync_in_progress or bills_sync_completed:
+        return
+        
+    # 백그라운드 작업으로 시작 (서버 시작 블로킹 방지)
+    asyncio.create_task(background_sync_bills())
+
+async def background_sync_bills():
+    """백그라운드에서 의안 데이터 동기화 수행"""
+    global bills_sync_in_progress, bills_sync_completed
+    
+    try:
+        bills_sync_in_progress = True
+        logger.info("서버 시작: 의안 데이터 백그라운드 동기화 시작...")
+        
+        db = next(get_db())
+        
+        try:
+            # 기존 데이터 체크
+            bills_count = db.query(BillModel).count()
+            
+            if bills_count < 100:
+                # 데이터가 적은 경우 - 전체 동기화
+                logger.info(f"의안 데이터 부족 (현재 {bills_count}개). 전체 동기화를 시작합니다.")
+                await sync_bills_data(db, max_pages=20, incremental=False, fetch_content=True)
+            else:
+                # 데이터가 이미 있는 경우 - 증분 동기화만 수행
+                logger.info(f"의안 데이터가 있습니다 (현재 {bills_count}개). 증분 동기화를 시작합니다.")
+                await sync_bills_data(db, max_pages=5, incremental=True, fetch_content=True)
+                
+            logger.info("서버 시작 시 의안 데이터 동기화 완료")
+            
+        except Exception as e:
+            logger.error(f"의안 데이터 동기화 중 오류: {e}")
+        finally:
+            db.close()
+            
+        bills_sync_completed = True
+    finally:
+        bills_sync_in_progress = False
 
 # 템플릿 라우트 추가
 @app.get("/", response_class=HTMLResponse)
@@ -413,58 +764,50 @@ async def member_detail_page(
     
     # 추가 데이터 수집
     try:
-        # 국회의원 발의안 목록 조회 (최근 5개)
-        bills = db.query(BillModel).filter(BillModel.proposer_id == member_id).order_by(BillModel.proposal_date.desc()).limit(5).all()
+        # 국회의원이 대표발의한 법안 목록 조회 (최근 5개)
+        bills = db.query(BillModel)\
+            .filter(BillModel.rep_proposer == member.name)\
+            .order_by(BillModel.proposal_date.desc())\
+            .limit(5).all()
+            
+        # DB에 발의안이 없으면 API에서 조회 시도
+        if not bills:
+            try:
+                # 여기에 의원별 발의안 조회 API 호출 로직 추가 (해당 API가 있으면)
+                # 예시로 가정 (실제로는 API를 확인하여 수정 필요)
+                pass
+            except Exception as e:
+                logger.error(f"의원 발의안 API 조회 중 오류: {e}")
         
-        # 발언 목록 가져오기 (API 호출)
+        # 국회의원 발언 목록 가져오기 (API 호출) - 기존 코드 유지
         speech_data = []
         try:
-            # API에서 해당 의원의 발언 데이터 조회 - API 엔드포인트 수정됨
             speech_records = assembly_api.get_speech_records(member_name=member.name)
-            # 최근 5개만 선택
             speech_data = speech_records[:5] if len(speech_records) > 0 else []
             logger.info(f"{member.name} 의원의 발언 데이터 {len(speech_data)}개 조회 성공")
         except Exception as e:
             logger.error(f"발언 데이터 조회 중 오류: {e}")
-            # API 오류 시 빈 리스트로 설정
             speech_data = []
         
         # 발언 데이터 포맷팅
         speeches = []
         for speech in speech_data:
             speeches.append({
-                "meeting_type": speech.get("TITLE", "본회의"),  # 회의제목
-                "date": speech.get("TAKING_DATE", ""),  # 회의일자
-                "content": speech.get("CONTENT", "발언 내용이 제공되지 않습니다.")[:100] + "...",  # 내용 요약 (없으면 기본 메시지)
-                "topic": speech.get("TOPIC", "일반 발언"),  # 주제 (없으면 기본값)
-                "link": speech.get("LINK_URL", "#")  # 링크 (없으면 #)
+                "meeting_type": speech.get("TITLE", "본회의"),
+                "date": speech.get("TAKING_DATE", ""),
+                "content": speech.get("CONTENT", "발언 내용이 제공되지 않습니다.")[:100] + "...",
+                "topic": speech.get("TOPIC", "일반 발언"),
+                "link": speech.get("LINK_URL", "#")
             })
-            
-        # 데이터 부족 시 기본 데이터로 보완
-        if len(speeches) == 0:
-            # API 응답 없을 경우 더미 데이터 제공
-            speeches = [
-                {
-                    "meeting_type": meeting_type,
-                    "date": f"2024-03-{10-i}",
-                    "content": "API에서 발언 데이터를 가져올 수 없습니다. 국회정보 API를 확인해주세요.",
-                    "topic": topic,
-                    "link": "#"
-                }
-                for i, (meeting_type, topic) in enumerate(zip(
-                    ["본회의", "상임위원회", "국정감사", "법안심사소위원회", "예산결산심사소위원회"],
-                    ["경제", "환경", "복지", "교육", "안보"]
-                ))
-            ]
         
-        # 의원 활동 지표 계산 
+        # 활동 지표 계산 (기존 코드 유지)
         activity_data = {
             "member": {
-                "bills": (member.num_bills / 50) * 100 if member.num_bills else 85,  # 최대값 대비 비율 계산
+                "bills": (member.num_bills / 50) * 100 if member.num_bills else 85,
                 "attendance": member.attendance_rate if member.attendance_rate else 95,
                 "speeches": (member.speech_count / 200) * 100 if member.speech_count else 90,
                 "pass_rate": member.bill_pass_rate if member.bill_pass_rate else 75,
-                "committee": 88  # 상임위 활동은 기본값 유지 (데이터 없음)
+                "committee": 88
             },
             "average": {
                 "bills": 70,
@@ -544,38 +887,65 @@ async def bills_page(
 ):
     """발의안 목록 페이지"""
     try:
-        # 의안번호 검색 시에만 API 호출
+        # 쿼리 빌드
+        query = db.query(BillModel)
+        
+        # 필터 적용
+        if title:
+            query = query.filter(BillModel.title.contains(title))
+        if proposer:
+            query = query.filter(BillModel.proposer.contains(proposer))
+        if status:
+            query = query.filter(BillModel.status == status)
+        if committee:
+            query = query.filter(BillModel.committee.contains(committee))
         if bill_no:
-            # API에서 발의안 데이터 가져오기
-            bills_data = assembly_api.get_bills(
-                bill_name=title,
-                proposer=proposer,
-                committee=committee,
-                bill_no=bill_no,
-                page_index=page,
-                page_size=limit
-            )
+            query = query.filter(BillModel.bill_no.contains(bill_no))
             
-            # 가져온 데이터를 처리하여 표시
-            bills = []
-            for bill_data in bills_data:
-                bill = {
-                    "id": bill_data.get("BILL_ID", ""),
-                    "no": bill_data.get("BILL_NO", ""),
-                    "title": bill_data.get("BILL_NM", ""),
-                    "proposer": bill_data.get("PPSR_NM", ""),
-                    "committee": bill_data.get("JRCMIT_NM", ""),
-                    "proposal_date": bill_data.get("PPSL_DT", ""),
-                    "status": bill_data.get("RGS_CONF_RSLT", "계류") if bill_data.get("RGS_CONF_RSLT") else "계류"
-                }
-                bills.append(bill)
-        else:
-            # 의안번호 없이 전체 조회는 불가능하므로 안내 메시지 표시
-            bills = []
+        # 총 의안 수
+        total_count = query.count()
+        
+        # 페이징 적용
+        bills_db = query.order_by(BillModel.proposal_date.desc())\
+                     .offset((page-1) * limit)\
+                     .limit(limit)\
+                     .all()
+        
+        # 의안 데이터 처리
+        bills = []
+        for bill in bills_db:
+            bills.append({
+                "id": bill.bill_id,
+                "no": bill.bill_no,
+                "title": bill.title,
+                "proposer": bill.proposer,
+                "committee": bill.committee,
+                "proposal_date": bill.proposal_date,
+                "status": bill.status
+            })
         
         # 페이지네이션 정보 계산
-        has_next = len(bills) == limit
+        total_pages = (total_count + limit - 1) // limit  # 올림 나눗셈
+        has_next = page < total_pages
         has_prev = page > 1
+        
+        # 페이지 버튼 범위 계산 (현재 페이지 주변 5개 페이지 표시)
+        max_page_buttons = 5  # 최대 페이지 버튼 수
+        half_buttons = max_page_buttons // 2
+        
+        if total_pages <= max_page_buttons:
+            # 전체 페이지 수가 최대 버튼 수보다 적으면 모든 페이지 표시
+            page_range = range(1, total_pages + 1)
+        else:
+            # 시작 페이지와 끝 페이지 계산
+            start_page = max(1, page - half_buttons)
+            end_page = min(total_pages, start_page + max_page_buttons - 1)
+            
+            # 끝 페이지가 최대 페이지에 도달하면 시작 페이지 재조정
+            if end_page == total_pages:
+                start_page = max(1, end_page - max_page_buttons + 1)
+            
+            page_range = range(start_page, end_page + 1)
         
         # 화면에 표시할 데이터 구성
         context = {
@@ -583,14 +953,16 @@ async def bills_page(
             "bills": bills,
             "page": page,
             "limit": limit,
+            "total_count": total_count,
+            "total_pages": total_pages,
             "has_next": has_next,
             "has_prev": has_prev,
+            "page_range": page_range,  # 추가된 페이지 범위
             "title": title or "",
             "proposer": proposer or "",
             "status": status or "",
             "committee": committee or "",
-            "bill_no": bill_no or "",
-            "info_message": "의안번호를 입력하시면 해당 의안정보를 검색할 수 있습니다." if not bill_no else None
+            "bill_no": bill_no or ""
         }
         
         return templates.TemplateResponse("bills.html", context)
@@ -608,6 +980,7 @@ async def bills_page(
                 "limit": limit,
                 "has_next": False,
                 "has_prev": page > 1,
+                "page_range": range(1, 2),  # 페이지 범위 기본값
                 "title": title or "",
                 "proposer": proposer or "",
                 "status": status or "",
@@ -626,92 +999,72 @@ async def bill_detail_page(
 ):
     """발의안 상세 페이지"""
     try:
-        # API에서 발의안 상세 정보 가져오기
-        bill_data = assembly_api.get_bill_detail(bill_no=bill_no)
+        # DB에서 의안 정보 조회
+        bill = db.query(BillModel).filter(BillModel.bill_no == bill_no).first()
         
-        # 발의안을 찾지 못한 경우 404 오류
-        if not bill_data:
-            raise HTTPException(status_code=404, detail="발의안을 찾을 수 없습니다")
-        
-        # 3. 발의안 정보 구성
-        bill = {
-            "id": bill_data.get("BILL_ID", ""),
-            "no": bill_data.get("BILL_NO", ""),
-            "title": bill_data.get("BILL_NM", ""),
-            "proposer": bill_data.get("PPSR_NM", ""),
-            "committee": bill_data.get("JRCMIT_NM", ""),
-            "proposal_date": bill_data.get("PPSL_DT", ""),
-            "status": bill_data.get("RGS_CONF_RSLT", "계류") if bill_data.get("RGS_CONF_RSLT") else "계류",
-            "link_url": bill_data.get("LINK_URL", ""),
+        # DB에 없거나 내용이 비어있으면 API에서 조회
+        if not bill or not bill.content:
+            bill_data = assembly_api.get_bill_detail(bill_no=bill_no)
             
-            # 처리 경과 정보
-            "committee_refer_date": bill_data.get("JRCMIT_CMMT_DT", ""),  # 소관위 회부일
-            "committee_present_date": bill_data.get("JRCMIT_PRSNT_DT", ""),  # 소관위 상정일
-            "committee_proc_date": bill_data.get("JRCMIT_PROC_DT", ""),  # 소관위 처리일
-            "committee_proc_result": bill_data.get("JRCMIT_PROC_RSLT", ""),  # 소관위 처리결과
+            if not bill_data:
+                raise HTTPException(status_code=404, detail="발의안을 찾을 수 없습니다")
             
-            "law_committee_refer_date": bill_data.get("LAW_CMMT_DT", ""),  # 법사위 회부일
-            "law_committee_present_date": bill_data.get("LAW_PRSNT_DT", ""),  # 법사위 상정일
-            "law_committee_proc_date": bill_data.get("LAW_PROC_DT", ""),  # 법사위 처리일
-            "law_committee_proc_result": bill_data.get("LAW_PROC_RSLT", ""),  # 법사위 처리결과
+            # API에서 가져온 내용으로 DB 업데이트
+            if bill and bill_data.get("DETAIL_CONTENT"):
+                bill.content = bill_data.get("DETAIL_CONTENT")
+                db.commit()
+                logger.info(f"의안 '{bill_no}' 상세 내용 DB 업데이트 완료")
             
-            "plenary_present_date": bill_data.get("RGS_PRSNT_DT", ""),  # 본회의 상정일
-            "plenary_resolve_date": bill_data.get("RGS_RSLN_DT", ""),  # 본회의 의결일
-            "plenary_result": bill_data.get("RGS_CONF_RSLT", "")  # 본회의 결과
-        }
-        
-        # 4. 처리 경과 정보 생성
-        process_history = []
-        
-        # 제안일
-        if bill["proposal_date"]:
-            process_history.append({
-                "date": bill["proposal_date"],
-                "content": "발의"
-            })
-        
-        # 소관위원회 회부일
-        if bill["committee_refer_date"]:
-            process_history.append({
-                "date": bill["committee_refer_date"],
-                "content": f"소관위원회({bill['committee']}) 회부"
-            })
-        
-        # 소관위원회 상정일
-        if bill["committee_present_date"]:
-            process_history.append({
-                "date": bill["committee_present_date"],
-                "content": f"소관위원회 상정"
-            })
-        
-        # 소관위원회 처리일
-        if bill["committee_proc_date"]:
-            process_history.append({
-                "date": bill["committee_proc_date"],
-                "content": f"소관위원회 의결: {bill['committee_proc_result']}"
-            })
-        
-        # 법사위 회부일
-        if bill["law_committee_refer_date"]:
-            process_history.append({
-                "date": bill["law_committee_refer_date"],
-                "content": "법제사법위원회 회부"
-            })
-        
-        # 본회의 의결일
-        if bill["plenary_resolve_date"]:
-            process_history.append({
-                "date": bill["plenary_resolve_date"],
-                "content": f"본회의 의결: {bill['plenary_result']}"
-            })
-        
-        # 처리 경과 정보 추가
-        bill["process_history"] = sorted(process_history, key=lambda x: x["date"])
+            # API 응답으로 상세 정보 구성
+            bill_id = bill_data.get("BILL_ID", "")
+            
+            # 제안자 정보 조회
+            proposers_info = {}
+            if bill_id:
+                proposers_info = assembly_api.get_bill_proposers(bill_id)
+            
+            # 응답 구성
+            bill = {
+                "id": bill_id,
+                "bill_no": bill_no,
+                "title": bill_data.get("BILL_NM", ""),
+                "proposer": bill_data.get("PPSR_NM", ""),
+                "committee": bill_data.get("JRCMIT_NM", ""),
+                "proposal_date": bill_data.get("PPSL_DT", ""),
+                "status": bill_data.get("RGS_CONF_RSLT", "계류"),
+                "content": bill_data.get("DETAIL_CONTENT", "내용 없음"),
+                "rep_proposer": proposers_info.get("rep_proposer", ""),
+                "co_proposers": proposers_info.get("co_proposers", []),
+                
+                # 처리 경과 정보 등
+                "process_history": _create_process_history(bill_data),
+                "link_url": bill_data.get("LINK_URL", "")
+            }
+        else:
+            # DB에서 조회한 경우 co_proposers가 문자열이므로 리스트로 변환
+            co_proposers = bill.co_proposers.split(", ") if bill.co_proposers else []
+            
+            # 필요한 추가 정보 구성
+            bill = {
+                "id": bill.bill_id,
+                "bill_no": bill.bill_no,
+                "title": bill.title,
+                "proposer": bill.proposer,
+                "committee": bill.committee,
+                "proposal_date": bill.proposal_date,
+                "status": bill.status,
+                "content": bill.content or "내용 없음",
+                "rep_proposer": bill.rep_proposer,
+                "co_proposers": co_proposers,
+                
+                # DB에 없는 정보는 기본값 설정
+                "process_history": [],
+                "link_url": f"https://likms.assembly.go.kr/bill/billDetail.do?billId={bill.bill_id}"
+            }
         
         return templates.TemplateResponse("bill_detail.html", {"request": request, "bill": bill})
     
     except HTTPException:
-        # 리소스를 찾을 수 없는 경우
         raise
     
     except Exception as e:
@@ -729,6 +1082,56 @@ async def bill_detail_page(
         }
         
         return templates.TemplateResponse("bill_detail.html", {"request": request, "bill": dummy_bill})
+
+# 처리 경과 정보 생성 도우미 함수
+def _create_process_history(bill_data):
+    """의안 처리 경과 정보 생성"""
+    process_history = []
+    
+    # 제안일
+    if bill_data.get("PPSL_DT"):
+        process_history.append({
+            "date": bill_data.get("PPSL_DT"),
+            "content": "발의"
+        })
+    
+    # 소관위원회 회부일
+    if bill_data.get("JRCMIT_CMMT_DT"):
+        process_history.append({
+            "date": bill_data.get("JRCMIT_CMMT_DT"),
+            "content": f"소관위원회({bill_data.get('JRCMIT_NM', '')}) 회부"
+        })
+    
+    # 소관위원회 상정일
+    if bill_data.get("JRCMIT_PRSNT_DT"):
+        process_history.append({
+            "date": bill_data.get("JRCMIT_PRSNT_DT"),
+            "content": "소관위원회 상정"
+        })
+    
+    # 소관위원회 처리일
+    if bill_data.get("JRCMIT_PROC_DT"):
+        process_history.append({
+            "date": bill_data.get("JRCMIT_PROC_DT"),
+            "content": f"소관위원회 의결: {bill_data.get('JRCMIT_PROC_RSLT', '')}"
+        })
+    
+    # 법사위 회부일
+    if bill_data.get("LAW_CMMT_DT"):
+        process_history.append({
+            "date": bill_data.get("LAW_CMMT_DT"),
+            "content": "법제사법위원회 회부"
+        })
+    
+    # 본회의 의결일
+    if bill_data.get("RGS_RSLN_DT"):
+        process_history.append({
+            "date": bill_data.get("RGS_RSLN_DT"),
+            "content": f"본회의 의결: {bill_data.get('RGS_CONF_RSLT', '')}"
+        })
+    
+    # 처리 경과 정보 날짜순 정렬
+    return sorted(process_history, key=lambda x: x["date"])
 
 # 활동 점수 업데이트 및 랭킹 생성 작업 스케줄러
 @app.on_event("startup")
@@ -839,6 +1242,37 @@ async def sync_data(request: Request, db: Session = Depends(get_db), assembly_te
         {"request": request, "result": result}
     )
 
+@app.get("/admin/sync-bills", response_class=HTMLResponse)
+async def sync_bills(request: Request, db: Session = Depends(get_db), assembly_term: int = 22):
+    """국회 의안 데이터를 API에서 가져와 DB에 동기화하는 관리자 페이지"""
+    result = {"success": False, "message": "", "count": 0}
+    
+    try:
+        # API 키 확인
+        api_key = settings.ASSEMBLY_API_KEY
+        if not api_key or api_key == "":
+            result["message"] = "API 키가 설정되지 않았습니다. .env 파일을 확인하세요."
+            return templates.TemplateResponse(
+                "admin/sync_data.html", 
+                {"request": request, "result": result}
+            )
+        
+        # 의안 데이터 동기화
+        total_bills = await sync_bills_data(db)
+        
+        result["success"] = True
+        result["message"] = "의안 데이터 동기화 완료"
+        result["count"] = total_bills
+        
+    except Exception as e:
+        result["message"] = f"오류 발생: {str(e)}"
+        logger.error(f"의안 동기화 중 오류: {e}")
+    
+    return templates.TemplateResponse(
+        "admin/sync_data.html", 
+        {"request": request, "result": result}
+    )
+
 @app.get("/admin/test-api", response_class=HTMLResponse)
 async def test_api(request: Request):
     """API 연결 테스트 페이지"""
@@ -884,6 +1318,13 @@ async def test_api(request: Request):
         "admin/test_api.html", 
         {"request": request, "result": result}
     )
+
+# 애플리케이션 종료 시 스케줄러 종료
+@app.on_event("shutdown")
+def shutdown_scheduler():
+    """애플리케이션 종료 시 스케줄러 종료"""
+    if scheduler.running:
+        scheduler.shutdown()
 
 if __name__ == "__main__":
     import uvicorn

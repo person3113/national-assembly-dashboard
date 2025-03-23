@@ -1,5 +1,6 @@
 import logging
 import requests
+import json
 from datetime import datetime
 from typing import Dict, List, Any, Optional
 
@@ -11,7 +12,11 @@ class AssemblyAPI:
     def __init__(self):
         self.base_url = settings.ASSEMBLY_API_BASE_URL
         self.api_key = settings.ASSEMBLY_API_KEY
+        # 제안자 정보 API 실패 횟수 추적
+        self.proposer_api_fail_count = 0
+        self.max_proposer_api_fails = 5  # 5번 이상 연속 실패하면 호출 중단
         
+    # _make_request 메서드의 로그 수준 조정
     def _make_request(self, endpoint: str, params: Dict[str, Any]) -> Dict:
         """국회정보 API에 요청을 보내는 기본 메서드"""
         # API 키 추가
@@ -44,12 +49,14 @@ class AssemblyAPI:
                 error_code = result["RESULT"]["CODE"]
                 error_msg = result["RESULT"]["MESSAGE"]
                 
-                # 데이터 없음 코드는 오류로 처리하지 않고 빈 결과로 처리
+                # 데이터 없음 코드는 오류로 처리하지 않고 빈 결과로 처리 (로그 레벨 INFO로 변경)
                 if error_code == "INFO-200" and "해당하는 데이터가 없습니다" in error_msg:
                     logger.info(f"API 응답: {error_code}, {error_msg} - 데이터 없음으로 처리")
                     # 데이터가 없는 경우 빈 결과 구조 반환
                     if endpoint == "ALLBILL":
                         return {"ALLBILL": {"row": []}}
+                    elif endpoint == "BILLINFOPPSR":
+                        return {endpoint: {"row": []}}
                     else:
                         return {endpoint: [{"header": {}}, {"row": []}]}
                 else:
@@ -212,17 +219,18 @@ class AssemblyAPI:
         endpoint = "ALLBILL"  # 동일한 엔드포인트 사용
         
         # BILL_NO(의안번호)는 필수 파라미터
-        if not bill_no:
-            logger.error("의안번호(BILL_NO)가 필요합니다.")
+        if not bill_no and not bill_id:
+            logger.error("의안번호(BILL_NO)나 의안ID(BILL_ID)가 필요합니다.")
             return {}
         
         params = {
             "pIndex": 1,    # 페이지 위치 (필수)
-            "pSize": 1,     # 페이지 당 요청 숫자 (필수)
-            "BILL_NO": bill_no  # 의안번호 (필수)
+            "pSize": 1      # 페이지 당 요청 숫자 (필수)
         }
         
-        # 의안ID는 선택적 파라미터
+        # 의안번호 또는 의안ID 중 하나를 사용
+        if bill_no:
+            params["BILL_NO"] = bill_no
         if bill_id:
             params["BILL_ID"] = bill_id
         
@@ -231,9 +239,6 @@ class AssemblyAPI:
             
             # API 응답에서 의안 상세정보 추출
             try:
-                # 로그로 응답 구조 확인 (디버깅용)
-                logger.info(f"API 응답 구조: {response_data.keys()}")
-                
                 # 응답 구조 확인하고 적절하게 처리
                 if "ALLBILL" in response_data and isinstance(response_data["ALLBILL"], dict) and "row" in response_data["ALLBILL"]:
                     bills_data = response_data["ALLBILL"]["row"]
@@ -383,6 +388,117 @@ class AssemblyAPI:
         except Exception as e:
             logger.error(f"발언 정보 조회 중 오류: {str(e)}")
             return []
+
+    def get_bill_ids_by_age(self, assembly_term: int = 22, page_index: int = 1, page_size: int = 100) -> List[Dict]:
+        """특정 대수의 의안 전체 정보 조회"""
+        endpoint = "ncocpgfiaoituanbr"  # 의안별 표결현황 API 엔드포인트
+        
+        params = {
+            "AGE": str(assembly_term),  # 대수 (필수)
+            "pIndex": page_index,       # 페이지 위치
+            "pSize": page_size          # 페이지 당 요청 숫자
+        }
+        
+        try:
+            response_data = self._make_request(endpoint, params)
+            
+            # API 응답에서 의안 정보 추출
+            if endpoint in response_data and len(response_data[endpoint]) > 1:
+                bills_data = response_data[endpoint][1]["row"]
+                logger.info(f"의안별 표결현황 API에서 {len(bills_data)}개 의안 정보 가져옴")
+                return bills_data
+            else:
+                logger.warning(f"API 응답에서 의안 데이터를 찾을 수 없음")
+                return []
+        except Exception as e:
+            logger.error(f"의안 정보 조회 중 오류: {str(e)}")
+            return []
+
+    def get_bill_proposers(self, bill_id: str, bill_data: Dict = None) -> Dict:
+        """의안 제안자 정보 조회 - 실패 시 기본 정보 활용"""
+        # 기본 반환값 설정
+        result = {
+            "rep_proposer": None,
+            "co_proposers": []
+        }
+        
+        # 의안 기본 정보에서 제안자 추출 시도
+        if bill_data:
+            # 의안명에서 발의자 추출 시도 (예: "xxx법률안(홍길동의원 대표발의)")
+            bill_name = bill_data.get("BILL_NAME", "")
+            if "의원 대표발의" in bill_name:
+                try:
+                    # 괄호 안의 내용 추출 (xxx의원 대표발의)
+                    proposer_info = bill_name.split("(")[-1].split(")")[0]
+                    if "의원 대표발의" in proposer_info:
+                        rep_proposer = proposer_info.split("의원")[0] + "의원"
+                        result["rep_proposer"] = rep_proposer
+                except:
+                    pass
+            
+            # 위원회 발의 또는 정부 제출 여부 확인
+            if "위원장" in bill_name or "위원회" in bill_name:
+                try:
+                    committee_part = bill_name.split("(")[-1].split(")")[0]
+                    if "위원장" in committee_part:
+                        result["rep_proposer"] = committee_part
+                        result["is_committee"] = True
+                except:
+                    pass
+            elif "정부" in bill_name:
+                result["rep_proposer"] = "정부"
+                result["is_government"] = True
+        
+        # 연속 실패 횟수가 임계값을 초과하면 API 호출 건너뛰기
+        if self.proposer_api_fail_count >= self.max_proposer_api_fails:
+            logger.debug(f"제안자 정보 API 연속 {self.proposer_api_fail_count}회 실패로 호출 건너뜀: {bill_id}")
+            return result
+        
+        # API에서 제안자 정보 조회 시도
+        try:
+            endpoint = "BILLINFOPPSR"  # 의안 제안자정보 API 엔드포인트
+            
+            params = {
+                "BILL_ID": bill_id,  # 의안ID (필수)
+                "pIndex": 1,
+                "pSize": 100
+            }
+            
+            response_data = self._make_request(endpoint, params)
+            
+            # API 응답에서 의안 제안자 정보 추출
+            if endpoint in response_data and "row" in response_data[endpoint]:
+                proposers_data = response_data[endpoint]["row"]
+                
+                # 대표발의자와 공동발의자 구분
+                rep_proposer = None
+                co_proposers = []
+                
+                for proposer in proposers_data:
+                    if proposer.get("REP_DIV") == "대표발의":
+                        rep_proposer = proposer.get("PPSR_NM", "")
+                    else:
+                        co_proposers.append(proposer.get("PPSR_NM", ""))
+                
+                # 결과가 있는 경우에만 업데이트
+                if rep_proposer:
+                    result["rep_proposer"] = rep_proposer
+                if co_proposers:
+                    result["co_proposers"] = co_proposers
+                
+                # 성공 시 실패 카운터 초기화
+                self.proposer_api_fail_count = 0
+            else:
+                # 데이터 없음은 실패로 간주
+                self.proposer_api_fail_count += 1
+                logger.info(f"제안자 정보 API 데이터 없음 ({self.proposer_api_fail_count}/{self.max_proposer_api_fails}): {bill_id}")
+        
+        except Exception as e:
+            # 실패 카운터 증가
+            self.proposer_api_fail_count += 1
+            logger.info(f"제안자 정보 API 호출 실패 ({self.proposer_api_fail_count}/{self.max_proposer_api_fails}): {str(e)}")
+        
+        return result
 
 # 서비스 인스턴스 생성
 assembly_api = AssemblyAPI()
