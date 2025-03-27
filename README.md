@@ -1,11 +1,15 @@
 # 실행방법
 
-- powershell 말고 cmd에서 해야 함.
+- 사전 준비
+  - powershell 말고 cmd에서 해야 함.
+  - 컴퓨터에 git과 python이 깔려 있어야 됨
 - 가상환경 생성 및 활성화
-  - python -m venv venv // 이미 되어 있음.
+  - python -m venv venv // 처음 clone했을 때만 입력
   - venv\Scripts\activate
-- FastAPI와 Uvicorn을 설치합니다.Uvicorn은 ASGI 서버로, FastAPI 애플리케이션을 실행하는 데 사용됩니다.
-  - pip install fastapi uvicorn // 이미 되어 있음.
+- 필요한 라이브러리(패키지) 전부 다운
+  - pip install -r requirements.txt // 처음 clone했을 때만 입력 or pull 받았을 때만 입력
+- 설치 확인
+  - pip list // 뭔가 오류가 나면 설치되었는지 확인
 - 애플리케이션 실행
   - uvicorn app.main:app --reload
 - 가상환경을 비활성화
@@ -39,3 +43,12 @@
 - [v] footer를 항상 화면 제일 밑에 붙어있게 고정시키기
 - [v] 의원 상세페이지에서 최근 발언 부분과 관련된 코드 빼기
 - [v] 의원 상세페이지에서 최근 발의안 부분 눌렀을 때 제대로 안 됨. 확실한 경로로 의안 상세페이지로 이동할 수 있도록 수정
+
+---
+
+정성오 개발 (25.3.27)
+- [v] 홈 화면과 활동 랭킹에서 더미 데이터가 아니라, 실제 국회의원 데이터를 가지고 표시하도록 수정하기
+- [] 발의안 페이지에서 검색 조건에 따라 internal server error가 발생하는 경우가 있음. 이 부분 수정하기.
+  - 여러 조건 별로 테스트 해보면서 수정하기
+  - 해보면서 발생하는 에러 로그 참고해서 수정하기기
+- [] 국회의원 상세 페이지에서 발의한 게 없다면, 그냥 발의한 게 없다고 표시하도록 수정하기.

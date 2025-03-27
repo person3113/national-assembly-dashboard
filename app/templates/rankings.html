@@ -93,27 +93,35 @@
                             </tr>
                         </thead>
                         <tbody>
-                            {% for i in range(20) %}
-                            <tr {% if i < 3 %}class="table-warning"{% endif %}>
-                                <td class="text-center fw-bold">{{ i+1 }}</td>
-                                <td><a href="/members/{{ i+1 }}">김의원{{ i+1 }}</a></td>
+                            {% for member in members %}
+                            <tr {% if loop.index <= 3 %}class="table-warning"{% endif %}>
+                                <td class="text-center fw-bold">{{ loop.index }}</td>
+                                <td><a href="/members/{{ member.id }}">{{ member.name }}</a></td>
                                 <td>
-                                    {% if i % 2 == 0 %}
-                                    <span class="badge bg-danger">국민의힘</span>
+                                    {% if member.party == "국민의힘" %}
+                                    <span class="badge bg-danger">{{ member.party }}</span>
+                                    {% elif member.party == "더불어민주당" %}
+                                    <span class="badge bg-primary">{{ member.party }}</span>
+                                    {% elif member.party == "정의당" %}
+                                    <span class="badge bg-warning text-dark">{{ member.party }}</span>
                                     {% else %}
-                                    <span class="badge bg-primary">더불어민주당</span>
+                                    <span class="badge bg-secondary">{{ member.party }}</span>
                                     {% endif %}
                                 </td>
-                                <td>서울 강남구</td>
+                                <td>{{ member.district }}</td>
                                 {% if category == "bills" %}
-                                <td class="text-center">{{ 50 - i*1.5 }}</td>
+                                <td class="text-center">{{ member.num_bills }}</td>
                                 {% elif category == "speeches" %}
-                                <td class="text-center">{{ 200 - i*5 }}</td>
+                                <td class="text-center">{{ member.speech_count }}</td>
                                 {% elif category == "attendance" %}
-                                <td class="text-center">{{ 100 - i*0.5 }}%</td>
+                                <td class="text-center">{{ member.attendance_rate }}%</td>
                                 {% else %}
-                                <td class="text-center">{{ 95 - i*1.2 }}</td>
+                                <td class="text-center">{{ member.activity_score }}</td>
                                 {% endif %}
+                            </tr>
+                            {% else %}
+                            <tr>
+                                <td colspan="5" class="text-center">데이터가 없습니다.</td>
                             </tr>
                             {% endfor %}
                         </tbody>
@@ -142,49 +150,49 @@
                     <li class="list-group-item d-flex justify-content-between">
                         <span>전체 평균</span>
                         {% if category == "bills" %}
-                        <span>24.5건</span>
+                        <span>{{ stats.total_avg }}건</span>
                         {% elif category == "speeches" %}
-                        <span>95.2회</span>
+                        <span>{{ stats.total_avg }}회</span>
                         {% elif category == "attendance" %}
-                        <span>85.7%</span>
+                        <span>{{ stats.total_avg }}%</span>
                         {% else %}
-                        <span>76.8점</span>
+                        <span>{{ stats.total_avg }}점</span>
                         {% endif %}
                     </li>
                     <li class="list-group-item d-flex justify-content-between">
                         <span>최고</span>
                         {% if category == "bills" %}
-                        <span>50건 (김의원1)</span>
+                        <span>{{ stats.max_value }}건 ({{ stats.max_name }})</span>
                         {% elif category == "speeches" %}
-                        <span>200회 (김의원1)</span>
+                        <span>{{ stats.max_value }}회 ({{ stats.max_name }})</span>
                         {% elif category == "attendance" %}
-                        <span>100% (김의원1)</span>
+                        <span>{{ stats.max_value }}% ({{ stats.max_name }})</span>
                         {% else %}
-                        <span>95점 (김의원1)</span>
+                        <span>{{ stats.max_value }}점 ({{ stats.max_name }})</span>
                         {% endif %}
                     </li>
                     <li class="list-group-item d-flex justify-content-between">
                         <span>최저</span>
                         {% if category == "bills" %}
-                        <span>3건 (박의원99)</span>
+                        <span>{{ stats.min_value }}건 ({{ stats.min_name }})</span>
                         {% elif category == "speeches" %}
-                        <span>12회 (박의원99)</span>
+                        <span>{{ stats.min_value }}회 ({{ stats.min_name }})</span>
                         {% elif category == "attendance" %}
-                        <span>52% (박의원99)</span>
+                        <span>{{ stats.min_value }}% ({{ stats.min_name }})</span>
                         {% else %}
-                        <span>42점 (박의원99)</span>
+                        <span>{{ stats.min_value }}점 ({{ stats.min_name }})</span>
                         {% endif %}
                     </li>
                     <li class="list-group-item d-flex justify-content-between">
                         <span>상위 10% 평균</span>
                         {% if category == "bills" %}
-                        <span>38.2건</span>
+                        <span>{{ stats.top_avg }}건</span>
                         {% elif category == "speeches" %}
-                        <span>165.4회</span>
+                        <span>{{ stats.top_avg }}회</span>
                         {% elif category == "attendance" %}
-                        <span>97.5%</span>
+                        <span>{{ stats.top_avg }}%</span>
                         {% else %}
-                        <span>88.6점</span>
+                        <span>{{ stats.top_avg }}점</span>
                         {% endif %}
                     </li>
                 </ul>
@@ -202,33 +210,35 @@
     const partyAverageChart = new Chart(partyAverageCtx, {
         type: 'bar',
         data: {
-            labels: ['국민의힘', '더불어민주당', '정의당', '기본소득당', '무소속'],
+            labels: [
+                {% for party, avg in party_averages.items() %}
+                    '{{ party }}',
+                {% endfor %}
+            ],
             datasets: [{
                 label: '{% if category == "bills" %}발의안 수{% elif category == "speeches" %}발언 횟수{% elif category == "attendance" %}출석률{% else %}활동 점수{% endif %}',
                 data: [
-                    {% if category == "bills" %}
-                    25.4, 23.7, 28.6, 22.0, 17.8
-                    {% elif category == "speeches" %}
-                    96.7, 94.2, 112.5, 87.3, 65.4
-                    {% elif category == "attendance" %}
-                    86.3, 85.2, 91.7, 88.5, 79.3
-                    {% else %}
-                    77.5, 76.2, 82.6, 75.4, 69.8
-                    {% endif %}
+                    {% for party, avg in party_averages.items() %}
+                        {{ avg }},
+                    {% endfor %}
                 ],
                 backgroundColor: [
                     'rgba(255, 99, 132, 0.7)',
                     'rgba(54, 162, 235, 0.7)',
                     'rgba(255, 206, 86, 0.7)',
                     'rgba(75, 192, 192, 0.7)',
-                    'rgba(153, 102, 255, 0.7)'
+                    'rgba(153, 102, 255, 0.7)',
+                    'rgba(255, 159, 64, 0.7)',
+                    'rgba(201, 203, 207, 0.7)'
                 ],
                 borderColor: [
                     'rgba(255, 99, 132, 1)',
                     'rgba(54, 162, 235, 1)',
                     'rgba(255, 206, 86, 1)',
                     'rgba(75, 192, 192, 1)',
-                    'rgba(153, 102, 255, 1)'
+                    'rgba(153, 102, 255, 1)',
+                    'rgba(255, 159, 64, 1)',
+                    'rgba(201, 203, 207, 1)'
                 ],
                 borderWidth: 1
             }]

@@ -43,15 +43,19 @@
             </div>
             <div class="card-body">
                 <div class="list-group">
-                    {% for i in range(5) %}
-                    <a href="#" class="list-group-item list-group-item-action">
+                    {% for bill in recent_bills %}
+                    <a href="/bills/{{ bill.bill_no }}" class="list-group-item list-group-item-action">
                         <div class="d-flex w-100 justify-content-between">
-                            <h6 class="mb-1">발의안 제목이 표시됩니다</h6>
-                            <small>2024-03-15</small>
+                            <h6 class="mb-1">{{ bill.title }}</h6>
+                            <small>{{ bill.proposal_date }}</small>
                         </div>
-                        <p class="mb-1">발의안 요약 내용이 표시됩니다...</p>
-                        <small>대표발의: 홍길동 의원</small>
+                        <p class="mb-1">{{ bill.content|truncate(100) }}</p>
+                        <small>대표발의: {{ bill.rep_proposer or bill.proposer or "정보 없음" }}</small>
                     </a>
+                    {% else %}
+                    <div class="list-group-item">
+                        <p class="mb-1">등록된 발의안이 없습니다.</p>
+                    </div>
                     {% endfor %}
                 </div>
             </div>
@@ -99,6 +103,7 @@
 </div>
 {% endblock %}
 
+<!-- app/templates/index.html 에서 Javascript 차트 코드 수정 -->
 {% block extra_js %}
 <script>
     // 랭킹 차트
@@ -106,10 +111,18 @@
     const rankingChart = new Chart(rankingCtx, {
         type: 'bar',
         data: {
-            labels: ['김의원', '이의원', '박의원', '최의원', '정의원', '강의원', '조의원', '윤의원', '장의원', '임의원'],
+            labels: [
+                {% for member in top_members %}
+                    '{{ member.name }}',
+                {% endfor %}
+            ],
             datasets: [{
                 label: '활동 점수',
-                data: [95, 92, 88, 85, 83, 80, 78, 75, 73, 70],
+                data: [
+                    {% for member in top_members %}
+                        {{ member.activity_score }},
+                    {% endfor %}
+                ],
                 backgroundColor: 'rgba(54, 162, 235, 0.7)',
                 borderColor: 'rgba(54, 162, 235, 1)',
                 borderWidth: 1
@@ -136,22 +149,26 @@
     const partyChart = new Chart(partyCtx, {
         type: 'doughnut',
         data: {
-            labels: ['국민의힘', '더불어민주당', '정의당', '기본소득당', '무소속'],
+            labels: {{ party_data.labels|safe }},
             datasets: [{
-                data: [170, 120, 6, 1, 3],
+                data: {{ party_data.counts|safe }},
                 backgroundColor: [
                     'rgba(255, 99, 132, 0.7)',
                     'rgba(54, 162, 235, 0.7)',
                     'rgba(255, 206, 86, 0.7)',
                     'rgba(75, 192, 192, 0.7)',
-                    'rgba(153, 102, 255, 0.7)'
+                    'rgba(153, 102, 255, 0.7)',
+                    'rgba(255, 159, 64, 0.7)',
+                    'rgba(201, 203, 207, 0.7)'
                 ],
                 borderColor: [
                     'rgba(255, 99, 132, 1)',
                     'rgba(54, 162, 235, 1)',
                     'rgba(255, 206, 86, 1)',
                     'rgba(75, 192, 192, 1)',
-                    'rgba(153, 102, 255, 1)'
+                    'rgba(153, 102, 255, 1)',
+                    'rgba(255, 159, 64, 1)',
+                    'rgba(201, 203, 207, 1)'
                 ],
                 borderWidth: 1
             }]

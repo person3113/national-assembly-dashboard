@@ -10,6 +10,7 @@ from fastapi.templating import Jinja2Templates
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse
 from sqlalchemy.orm import Session
+from sqlalchemy.sql import func  
 from typing import Optional
 from datetime import date, datetime
 
@@ -698,10 +699,35 @@ async def background_sync_bills():
     finally:
         bills_sync_in_progress = False
 
-# 템플릿 라우트 추가
 @app.get("/", response_class=HTMLResponse)
-async def home_page(request: Request):
-    return templates.TemplateResponse("index.html", {"request": request})
+async def home_page(request: Request, db: Session = Depends(get_db)):
+    # 활동 점수 상위 10명의 국회의원 조회
+    top_members = db.query(MemberModel).order_by(MemberModel.activity_score.desc()).limit(10).all()
+    
+    # 정당별 의원 수 조회
+    party_counts = db.query(
+        MemberModel.party, 
+        func.count(MemberModel.id).label('count')
+    ).group_by(MemberModel.party).all()
+    
+    # 정당별 의원 수를 차트용 데이터로 변환
+    party_data = {
+        'labels': [party[0] for party in party_counts if party[0]],  # 빈 문자열 제외
+        'counts': [party[1] for party in party_counts if party[0]]   # 빈 문자열 제외
+    }
+    
+    # 최근 발의안 5개 조회
+    recent_bills = db.query(BillModel).order_by(BillModel.proposal_date.desc()).limit(5).all()
+    
+    return templates.TemplateResponse(
+        "index.html", 
+        {
+            "request": request,
+            "top_members": top_members,
+            "party_data": party_data,
+            "recent_bills": recent_bills
+        }
+    )
 
 @app.get("/members", response_class=HTMLResponse)
 async def members_page(
@@ -840,7 +866,7 @@ async def rankings_page(
     db: Session = Depends(get_db),
     category: str = "activity",  # 'activity', 'bills', 'speeches', 'attendance'
     party: Optional[str] = None,
-    limit: int = 50
+    limit: int = 20
 ):
     # 정렬 기준 설정
     if category == "bills":
@@ -859,13 +885,103 @@ async def rankings_page(
     
     members = query.order_by(order_by).limit(limit).all()
     
+    # 정당별 평균 계산
+    party_averages = {}
+    parties = db.query(MemberModel.party).distinct().all()
+    
+    for party_row in parties:
+        party_name = party_row[0]
+        if not party_name:  # 정당명이 없는 경우 스킵
+            continue
+            
+        # 해당 정당 의원들의 평균 계산
+        if category == "bills":
+            avg = db.query(func.avg(MemberModel.num_bills)).filter(MemberModel.party == party_name).scalar() or 0
+        elif category == "speeches":
+            avg = db.query(func.avg(MemberModel.speech_count)).filter(MemberModel.party == party_name).scalar() or 0
+        elif category == "attendance":
+            avg = db.query(func.avg(MemberModel.attendance_rate)).filter(MemberModel.party == party_name).scalar() or 0
+        else:  # activity
+            avg = db.query(func.avg(MemberModel.activity_score)).filter(MemberModel.party == party_name).scalar() or 0
+            
+        party_averages[party_name] = round(float(avg), 1)
+    
+    # 전체 평균 계산
+    if category == "bills":
+        total_avg = db.query(func.avg(MemberModel.num_bills)).scalar() or 0
+    elif category == "speeches":
+        total_avg = db.query(func.avg(MemberModel.speech_count)).scalar() or 0
+    elif category == "attendance":
+        total_avg = db.query(func.avg(MemberModel.attendance_rate)).scalar() or 0
+    else:  # activity
+        total_avg = db.query(func.avg(MemberModel.activity_score)).scalar() or 0
+    
+    # 최대값과 최소값 찾기
+    if category == "bills":
+        max_record = db.query(MemberModel).order_by(MemberModel.num_bills.desc()).first()
+        min_record = db.query(MemberModel).filter(MemberModel.num_bills > 0).order_by(MemberModel.num_bills).first()
+        max_value = max_record.num_bills if max_record else 0
+        min_value = min_record.num_bills if min_record else 0
+        max_name = max_record.name if max_record else ""
+        min_name = min_record.name if min_record else ""
+    elif category == "speeches":
+        max_record = db.query(MemberModel).order_by(MemberModel.speech_count.desc()).first()
+        min_record = db.query(MemberModel).filter(MemberModel.speech_count > 0).order_by(MemberModel.speech_count).first()
+        max_value = max_record.speech_count if max_record else 0
+        min_value = min_record.speech_count if min_record else 0
+        max_name = max_record.name if max_record else ""
+        min_name = min_record.name if min_record else ""
+    elif category == "attendance":
+        max_record = db.query(MemberModel).order_by(MemberModel.attendance_rate.desc()).first()
+        min_record = db.query(MemberModel).filter(MemberModel.attendance_rate > 0).order_by(MemberModel.attendance_rate).first()
+        max_value = max_record.attendance_rate if max_record else 0
+        min_value = min_record.attendance_rate if min_record else 0
+        max_name = max_record.name if max_record else ""
+        min_name = min_record.name if min_record else ""
+    else:  # activity
+        max_record = db.query(MemberModel).order_by(MemberModel.activity_score.desc()).first()
+        min_record = db.query(MemberModel).filter(MemberModel.activity_score > 0).order_by(MemberModel.activity_score).first()
+        max_value = max_record.activity_score if max_record else 0
+        min_value = min_record.activity_score if min_record else 0
+        max_name = max_record.name if max_record else ""
+        min_name = min_record.name if min_record else ""
+    
+    # 상위 10% 평균 계산
+    total_count = db.query(MemberModel).count()
+    top_10_percent_count = max(1, int(total_count * 0.1))  # 최소 1명
+    
+    if category == "bills":
+        top_members = db.query(MemberModel).order_by(MemberModel.num_bills.desc()).limit(top_10_percent_count).all()
+        top_avg = sum(m.num_bills for m in top_members) / len(top_members) if top_members else 0
+    elif category == "speeches":
+        top_members = db.query(MemberModel).order_by(MemberModel.speech_count.desc()).limit(top_10_percent_count).all()
+        top_avg = sum(m.speech_count for m in top_members) / len(top_members) if top_members else 0
+    elif category == "attendance":
+        top_members = db.query(MemberModel).order_by(MemberModel.attendance_rate.desc()).limit(top_10_percent_count).all()
+        top_avg = sum(m.attendance_rate for m in top_members) / len(top_members) if top_members else 0
+    else:  # activity
+        top_members = db.query(MemberModel).order_by(MemberModel.activity_score.desc()).limit(top_10_percent_count).all()
+        top_avg = sum(m.activity_score for m in top_members) / len(top_members) if top_members else 0
+    
+    stats = {
+        'total_avg': round(float(total_avg), 1),
+        'max_value': round(float(max_value), 1),
+        'max_name': max_name,
+        'min_value': round(float(min_value), 1),
+        'min_name': min_name,
+        'top_avg': round(float(top_avg), 1)
+    }
+    
     return templates.TemplateResponse(
         "rankings.html", 
         {
             "request": request,
             "members": members,
             "category": category,
-            "party": party
+            "party": party,
+            "limit": limit,
+            "party_averages": party_averages,
+            "stats": stats
         }
     )
 
