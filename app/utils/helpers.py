@@ -159,10 +159,15 @@ def calculate_pagination_range(page: int, total_pages: int, max_buttons: int = 5
     Returns:
         List[int]: 표시할 페이지 번호 목록
     """
+    # 입력값 유효성 검사 추가
+    page = max(1, min(page, total_pages))
+    total_pages = max(1, total_pages)
+    max_buttons = max(1, max_buttons)
+    
     half_buttons = max_buttons // 2
     
     if total_pages <= max_buttons:
-        # 전체 페이지 수가 최대 버튼 수보다 적으면 모든 페이지 표시
+        # 전체 페이지 수가 최대 버튼 수보다 적으면, 모든 페이지 표시
         return list(range(1, total_pages + 1))
     else:
         # 시작 페이지와 끝 페이지 계산

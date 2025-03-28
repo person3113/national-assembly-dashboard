@@ -59,6 +59,10 @@ async def bills_page(
         HTMLResponse: 발의안 목록 페이지 HTML
     """
     try:
+        # 페이지 번호 유효성 검사 추가
+        page = 1 if page < 1 else page
+        limit = max(1, min(limit, 100))  # 1~100 사이로 제한
+
         # 쿼리 빌드
         query = db.query(BillModel)
         
@@ -76,7 +80,7 @@ async def bills_page(
             
         # 총 의안 수
         total_count = query.count()
-        
+
         # 페이징 적용
         bills_db = query.order_by(BillModel.proposal_date.desc())\
                      .offset((page-1) * limit)\
@@ -102,7 +106,11 @@ async def bills_page(
         has_prev = page > 1
         
         # 페이지 버튼 범위 계산
-        page_range = calculate_pagination_range(page, total_pages)
+        try:
+            page_range = calculate_pagination_range(page, total_pages)
+        except Exception as e:
+            logger.error(f"페이지 범위 계산 중 오류: {e}")
+            page_range = list(range(max(1, page-2), min(total_pages+1, page+3)))
         
         # 화면에 표시할 데이터 구성
         context = {
