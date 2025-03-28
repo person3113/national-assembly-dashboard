@@ -3,6 +3,9 @@
 - 사전 준비
   - powershell 말고 cmd에서 해야 함.
   - 컴퓨터에 git과 python이 깔려 있어야 됨
+  - 처음 클론했다면 .env 파일을 만들어야 함.
+    - .gitignore에 .env 추가되어 있어서 개인적으로 만들어야 함.
+    - .env 파일에 open api에서 발급받은 키를 넣어야 함.
 - 가상환경 생성 및 활성화
   - python -m venv venv // 처음 clone했을 때만 입력
   - venv\Scripts\activate
@@ -10,9 +13,6 @@
   - pip install -r requirements.txt // 처음 clone했을 때만 입력 or pull 받았을 때만 입력
 - 설치 확인
   - pip list // 뭔가 오류가 나면 설치되었는지 확인
-- 처음 클론했다면 .env 파일을 만들어야 함.
-  - .gitignore에 .env 추가되어 있어서 개인적으로 만들어야 함.
-  - .env 파일에 open api에서 발급받은 키를 넣어야 함.
 - 애플리케이션 실행
   - uvicorn app.main:app --reload
 - 가상환경을 비활성화
@@ -20,9 +20,6 @@
 
 
 > - 우리 사이트 API 문서: http://127.0.0.1:8000/docs
-> - api test 경로: http://127.0.0.1:8000/admin/test-api
-> - api 데이터 동기화: http://127.0.0.1:8000/admin/sync-data
-> - 데이터를 강제로 새로고침하고 싶은 경우에는 별도의 API 엔드포인트(예: /admin/sync-data)를 통해 수동으로 호출할 수 있습니다.
 
 # 개발 과정
 
@@ -56,7 +53,7 @@
 - [] 기능 구현 대신, 리팩토링하고 다듬으면서 코드 뜯어보고 이해해보기
   - [v] 불필요한 apscheduler 코드 삭제하기. 어차피 서버 시작할 때 최신 정보 조회해보니까.
   - [v] dummy 데이터 관련 코드도 그냥 다 삭제하기. 더미 데이터가 아니라 실제 데이터를 사용하도록 수정했으니까.
-  - [] /admin 관련 코드 다 삭제해도 앱에 문제 없으면 싹 삭제하고 정리하기.
+  - [v] /admin 관련 코드 다 삭제해도 앱에 문제 없으면 싹 삭제하고 정리하기.
 
 # 개발 예정
 
