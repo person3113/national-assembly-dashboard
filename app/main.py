@@ -22,10 +22,6 @@ from app.models.member import Member as MemberModel
 from app.models.bill import Bill as BillModel  
 from app.services.assembly_api import assembly_api
 
-# APScheduler 패키지 설치 필요: pip install apscheduler
-from apscheduler.schedulers.asyncio import AsyncIOScheduler
-from apscheduler.triggers.cron import CronTrigger
-
 # 템플릿에서 사용할 필터 추가
 from jinja2 import pass_context
 
@@ -33,13 +29,10 @@ from jinja2 import pass_context
 def pprint_filter(context, value):
     return pprint.pformat(value)
 
-# 전역 변수로 동기화 상태 추적
+
+# 서버 시작 시 동기화 상태 추적을 위한 변수 추가
 bills_sync_in_progress = False
 bills_sync_completed = False
-
-# 스케줄러 생성
-scheduler = AsyncIOScheduler()
-
 
 # 데이터베이스 테이블 생성 - 테이블이 없을 때만 생성
 # member.Base.metadata.drop_all(bind=engine)  # 이 줄을 제거하거나 주석 처리
@@ -50,57 +43,6 @@ app = FastAPI(
     title=settings.PROJECT_NAME,
     openapi_url=f"{settings.API_V1_STR}/openapi.json"
 )
-
-# 스케줄러 작업: 매일 새벽 2시에 의안 데이터 동기화
-@app.on_event("startup")
-def setup_scheduler():
-    """애플리케이션 시작 시 스케줄러 설정"""
-    # 매일 새벽 2시에 의안 데이터 업데이트
-    scheduler.add_job(
-        scheduled_sync_bills,
-        CronTrigger(hour=2, minute=0),
-        id="daily_bills_sync"
-    )
-    
-    # 매주 일요일 새벽 3시에 의안 데이터 전체 업데이트 (기존 데이터도 업데이트)
-    scheduler.add_job(
-        scheduled_full_sync_bills,
-        CronTrigger(day_of_week="sun", hour=3, minute=0),
-        id="weekly_full_bills_sync"
-    )
-    
-    # 스케줄러 시작
-    scheduler.start()
-
-async def scheduled_sync_bills():
-    """스케줄러에서 실행되는 의안 데이터 동기화 함수"""
-    logger.info("스케줄러: 일일 의안 데이터 동기화 시작")
-    
-    db = next(get_db())
-    try:
-        # 증분 업데이트 방식으로 최신 의안만 추가
-        await sync_bills_data(db, max_pages=5, update_existing=True, incremental=True)
-    except Exception as e:
-        logger.error(f"스케줄러 의안 동기화 중 오류: {e}")
-    finally:
-        db.close()
-
-async def scheduled_full_sync_bills():
-    """스케줄러에서 실행되는 의안 데이터 전체 동기화 함수"""
-    logger.info("스케줄러: 주간 의안 데이터 전체 동기화 시작")
-    
-    db = next(get_db())
-    try:
-        # 1. 최근 데이터 업데이트 (기존 데이터도 업데이트)
-        await sync_bills_data(db, max_pages=10, update_existing=True, incremental=True)
-        
-        # 2. 누락된 데이터 검사 및 보완 (선택적)
-        # 이 부분은 필요할 경우 구현
-        
-    except Exception as e:
-        logger.error(f"스케줄러 전체 의안 동기화 중 오류: {e}")
-    finally:
-        db.close()
 
 # CORS 미들웨어 설정
 app.add_middleware(
@@ -1456,15 +1398,6 @@ async def test_api(request: Request):
         {"request": request, "result": result}
     )
 
-# 애플리케이션 종료 시 스케줄러 종료
-@app.on_event("shutdown")
-def shutdown_scheduler():
-    """애플리케이션 종료 시 스케줄러 종료"""
-    if scheduler.running:
-        scheduler.shutdown()
-
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("app.main:app", host="0.0.0.0", port=8000, reload=True)
-
-# 라우트 추가: 필요시 확장 (발의안, 검색 등)
