@@ -98,41 +98,6 @@ def calculate_activity_score(member: MemberModel) -> float:
     
     return round(activity_score, 1)
 
-# 초기 데이터 삽입 함수
-def insert_initial_data(db: Session):
-    # 국회의원 데이터 추가
-    member1 = MemberModel(
-        name="김의원1",
-        hanja_name="金議員1",
-        eng_name="Kim Euiwon1",
-        birth_date=date(1970, 1, 1),
-        position="국회의원",
-        party="국민의힘",
-        district="서울 강남구",
-        num_bills=10,
-        attendance_rate=95.0,
-        speech_count=50,
-        activity_score=90.0,
-        bill_pass_rate=80.0,  
-        is_active=True,
-        last_updated=date.today()
-    )
-    db.add(member1)
-    
-    # 발의안 데이터 추가
-    bill1 = BillModel(
-        title="국민건강보험법 일부개정법률안",
-        proposer="김의원1",
-        status="계류",
-        committee="보건복지위원회",
-        proposal_date=date(2024, 3, 15),
-        content="국민건강보험법 일부를 개정하여 국민의 건강을 증진시키고자 함.",
-        proposer_id=1
-    )
-    db.add(bill1)
-    
-    db.commit()
-
 async def sync_member_bills(db: Session):
     """국회의원별 발의안 정보를 API에서 가져와 DB에 저장"""
     try:
@@ -489,24 +454,11 @@ def startup_event():
         # API 키 확인
         api_key = settings.ASSEMBLY_API_KEY
         if not api_key or api_key == "":
-            logger.warning("API 키가 설정되지 않았습니다. 샘플 데이터를 사용합니다.")
-            # API 키가 없을 경우 샘플 데이터 사용
-            members_count = db.query(MemberModel).count()
-            if members_count == 0:
-                insert_initial_data(db)
-                logger.info("샘플 데이터 삽입 완료")
-            return
+            logger.warning("API 키가 설정되지 않았습니다.")
         
         # API에서 국회의원 목록 조회
         logger.info("API에서 국회의원 데이터를 불러오는 중...")
         members_data = assembly_api.get_members(assembly_term=22)  # 22대 국회의원 기본값
-        
-        if not members_data:
-            logger.warning("API에서 데이터를 가져오지 못했습니다. 샘플 데이터를 사용합니다.")
-            members_count = db.query(MemberModel).count()
-            if members_count == 0:
-                insert_initial_data(db)
-            return
         
         # API 데이터 추가
         member_count = 0
@@ -584,14 +536,6 @@ def startup_event():
     except Exception as e:
         db.rollback()
         logger.error(f"초기화 중 오류 발생: {e}")
-        # 오류 발생 시 기본 데이터 확인
-        members_count = db.query(MemberModel).count()
-        if members_count == 0:
-            try:
-                insert_initial_data(db)
-                logger.info("오류 발생으로 샘플 데이터 삽입 완료")
-            except Exception as e2:
-                logger.error(f"샘플 데이터 삽입 중 오류: {e2}")
     finally:
         db.close()
 
