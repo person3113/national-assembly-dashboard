@@ -156,7 +156,7 @@
                         </li>
                         
                         <!-- 첫 페이지로 -->
-                        {% if page_range.start > 1 %}
+                        {% if page_range[0] > 1 %}
                         <li class="page-item">
                             <a class="page-link" href="?bill_no={{ bill_no }}&title={{ title }}&proposer={{ proposer }}&status={{ status }}&committee={{ committee }}&page=1">1</a>
                         </li>
@@ -176,7 +176,7 @@
                         
                         <!-- 마지막 페이지로 -->
                         {% if page_range[-1] < total_pages %}
-                        {% if page_range[-1] < total_pages - 1 %}
+                        {% if total_pages > 1 and page_range[-1] < total_pages %}
                         <li class="page-item disabled">
                             <span class="page-link">...</span>
                         </li>
